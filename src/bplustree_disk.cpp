@@ -197,6 +197,95 @@ DataObject* DiskBPlusTree::search_data_object(const DataObject& obj) {
     return nullptr;
 }
 
+DataObject* DiskBPlusTree::search_data_object(int key) {
+    uint32_t pid = pm.getRoot();
+    if (pid == INVALID_PAGE) return nullptr;
+    
+    BPlusNode node;
+    
+    while (true) {
+        read(pid, node);
+        
+        int i = 0;
+        while (i < node.keyCount && key >= node.keys[i]) i++;
+        
+        if (node.isLeaf) break;
+        pid = node.children[i];
+    }
+    
+    for (int i = 0; i < node.keyCount; i++) {
+        if (node.keys[i] == key) {
+            // Reconstruct DataObject from fixed-size array
+            DataObject* result = new DataObject(node.vector_sizes[i], key);
+            for (int j = 0; j < node.vector_sizes[i] && j < MAX_VECTOR_SIZE; j++) {
+                result->set_vector_element(j, node.data_vectors[i][j]);
+            }
+            return result;
+        }
+    }
+    
+    return nullptr;
+}
+
+DataObject* DiskBPlusTree::search_data_object(float key) {
+    return search_data_object(static_cast<int>(key));
+}
+
+std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key) {
+    std::vector<DataObject*> results;
+    
+    uint32_t pid = pm.getRoot();
+    if (pid == INVALID_PAGE) return results;
+    
+    // Find leaf node that contains min_key
+    BPlusNode node;
+    while (true) {
+        read(pid, node);
+        
+        int i = 0;
+        while (i < node.keyCount && min_key >= node.keys[i]) i++;
+        
+        if (node.isLeaf) break;
+        pid = node.children[i];
+    }
+    
+    // Collect data from this leaf and subsequent leaves until max_key is reached
+    uint32_t currentPid = pid;
+    uint32_t visitedCount = 0;
+    const uint32_t MAX_LEAVES_TO_VISIT = 100; // Safety limit
+    
+    while (currentPid != INVALID_PAGE && visitedCount < MAX_LEAVES_TO_VISIT) {
+        BPlusNode leaf;
+        read(currentPid, leaf);
+        
+        for (int i = 0; i < leaf.keyCount; i++) {
+            if (leaf.keys[i] >= min_key && leaf.keys[i] <= max_key) {
+                DataObject* result = new DataObject(leaf.vector_sizes[i], leaf.keys[i]);
+                for (int j = 0; j < leaf.vector_sizes[i] && j < MAX_VECTOR_SIZE; j++) {
+                    result->set_vector_element(j, leaf.data_vectors[i][j]);
+                }
+                results.push_back(result);
+            }
+            else if (leaf.keys[i] > max_key) {
+                return results; // We've passed the range
+            }
+        }
+        
+        uint32_t nextPid = leaf.next;
+        if (nextPid == currentPid) {
+            break; // Circular reference detected
+        }
+        currentPid = nextPid; // Move to next leaf
+        visitedCount++;
+    }
+    
+    return results;
+}
+
+std::vector<DataObject*> DiskBPlusTree::search_range(float min_key, float max_key) {
+    return search_range(static_cast<int>(min_key), static_cast<int>(max_key));
+}
+
 bool DiskBPlusTree::search(const DataObject& obj) {
     int key;
     if (obj.is_int_value()) {

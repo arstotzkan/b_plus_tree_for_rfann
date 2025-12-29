@@ -22,7 +22,7 @@ int main() {
     // Create and insert DataObject with float value
     DataObject obj2(3, 3.14f);
     obj2.set_vector_element(0, 100);
-    obj2.set_vector_element(1, 200);
+    obj2.set_vector_element(1, 300);
     obj2.set_vector_element(2, 300);
     
     std::cout << "Inserting DataObject 2:" << std::endl;
@@ -39,7 +39,7 @@ int main() {
     obj3.print();
     dataTree.insert_data_object(obj3);
 
-    DataObject obj4(3, 25);
+    DataObject obj4(3, 100);
     obj4.set_vector_element(0, 99);
     obj4.set_vector_element(1, 88);
     obj4.set_vector_element(2, 77);
@@ -90,6 +90,53 @@ int main() {
     } else {
         std::cout << "DataObject with key 999 not found (as expected)" << std::endl;
     }
+
+    std::cout << std::endl << "=== Testing New Search Methods ===" << std::endl;
+    
+    // Test search with int key
+    DataObject* found_int = dataTree.search_data_object(42);
+    if (found_int) {
+        std::cout << "Found with int key 42:" << std::endl;
+        found_int->print();
+        delete found_int;
+    } else {
+        std::cout << "Not found with int key 42" << std::endl;
+    }
+    
+    // Test search with float key
+    DataObject* found_float = dataTree.search_data_object(3.14f);
+    if (found_float) {
+        std::cout << "Found with float key 3.14:" << std::endl;
+        found_float->print();
+        delete found_float;
+    } else {
+        std::cout << "Not found with float key 3.14" << std::endl;
+    }
+    
+    // Test range search
+    std::cout << std::endl << "=== Testing Range Search (20 to 80) ===" << std::endl;
+    std::vector<DataObject*> range_results = dataTree.search_range(20, 80);
+    std::cout << "Found " << range_results.size() << " objects in range [20, 80]:" << std::endl;
+    for (size_t i = 0; i < range_results.size(); i++) {
+        std::cout << "  Object " << (i+1) << ": ";
+        range_results[i]->print();
+        delete range_results[i];
+    }
+    
+    std::cout << std::endl << "=== Testing Range Search (90 to 105) ===" << std::endl;
+    std::vector<DataObject*> empty_results = dataTree.search_range(90, 105);
+    std::cout << "Found " << empty_results.size() << " objects in range [90, 105]" << std::endl;
+
+    for (size_t i = 0; i < empty_results.size(); i++) {
+        std::cout << "  Object " << (i+1) << ": ";
+        empty_results[i]->print();
+        delete empty_results[i];
+    }
+
+    // Test range search with no results
+    std::cout << std::endl << "=== Testing Range Search (300 to 500) ===" << std::endl;
+    std::vector<DataObject*> high_range_results = dataTree.search_range(300, 500);
+    std::cout << "Found " << high_range_results.size() << " objects in range [300, 500]" << std::endl;
 
     std::cout << std::endl << "DataObject B+ Tree structure:" << std::endl;
     dataTree.print_tree();

@@ -6,6 +6,7 @@
 class PageManager {
 public:
     explicit PageManager(const std::string& file);
+    ~PageManager(); // Add destructor
     template<typename T>
     void readPage(uint32_t pid, T* buffer) {
         file.seekg(pid * PAGE_SIZE);

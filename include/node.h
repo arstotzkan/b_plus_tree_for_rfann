@@ -3,8 +3,8 @@
 #include "DataObject.h"
 constexpr size_t PAGE_SIZE = 4096;
 constexpr uint32_t INVALID_PAGE = 0xFFFFFFFF;
-constexpr int ORDER = 16; // Reduced order to fit page size
-constexpr int MAX_VECTOR_SIZE = 10; // Further reduced vector size
+constexpr int ORDER = 8; // Further reduced to prevent overflow
+constexpr int MAX_VECTOR_SIZE = 5; // Reduced to fit comfortably in page
 
 // BPlusNode for DataObject storage only
 struct BPlusNode {

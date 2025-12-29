@@ -33,6 +33,12 @@ PageManager::PageManager(const std::string& filename) {
     }
 }
 
+PageManager::~PageManager() {
+    if (file.is_open()) {
+        file.close();
+    }
+}
+
 uint32_t PageManager::allocatePage() {
     FileHeader header{};
     file.seekg(0);
