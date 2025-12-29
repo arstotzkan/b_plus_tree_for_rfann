@@ -5,10 +5,10 @@
 int main() {
     // Test DataObject B+ tree (new functionality)
     std::cout << "=== Testing DataObject B+ Tree ===" << std::endl;
-    DiskBPlusTree dataTree("data/test_data_index.bpt");
+    DiskBPlusTree dataTree("data/test_data_index2.bpt");
 
     // Create and insert DataObject with int values
-    DataObject obj1(5, 42);
+    DataObject obj1(3, 42);
     obj1.set_vector_element(0, 10);
     obj1.set_vector_element(1, 20);
     obj1.set_vector_element(2, 30);
@@ -30,7 +30,7 @@ int main() {
     dataTree.insert_data_object(obj2);
 
     // Create and insert more DataObjects
-    DataObject obj3(4, 100);
+    DataObject obj3(3, 100);
     obj3.set_vector_element(0, 1);
     obj3.set_vector_element(1, 2);
     obj3.set_vector_element(2, 3);
@@ -39,7 +39,7 @@ int main() {
     obj3.print();
     dataTree.insert_data_object(obj3);
 
-    DataObject obj4(2, 25);
+    DataObject obj4(3, 25);
     obj4.set_vector_element(0, 99);
     obj4.set_vector_element(1, 88);
     obj4.set_vector_element(2, 77);
