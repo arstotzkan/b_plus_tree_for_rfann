@@ -42,4 +42,12 @@ public:
     // Utility functions
     void print() const;
     void clear_vector();
+
+    // Comparison operators for B+ tree ordering
+    bool operator<(const DataObject& other) const;
+    bool operator>(const DataObject& other) const;
+    bool operator==(const DataObject& other) const;
+    bool operator<=(const DataObject& other) const;
+    bool operator>=(const DataObject& other) const;
+    bool operator!=(const DataObject& other) const;
 };

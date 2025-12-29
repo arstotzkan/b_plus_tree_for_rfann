@@ -107,3 +107,44 @@ void DataObject::print() const {
 void DataObject::clear_vector() {
     data_vector.clear();
 }
+
+// Comparison operators for B+ tree ordering
+bool DataObject::operator<(const DataObject& other) const {
+    if (is_int_value() && other.is_int_value()) {
+        return get_int_value() < other.get_int_value();
+    } else if (is_int_value() && !other.is_int_value()) {
+        return get_int_value() < other.get_float_value();
+    } else if (!is_int_value() && other.is_int_value()) {
+        return get_float_value() < other.get_int_value();
+    } else {
+        return get_float_value() < other.get_float_value();
+    }
+}
+
+bool DataObject::operator>(const DataObject& other) const {
+    return other < *this;
+}
+
+bool DataObject::operator==(const DataObject& other) const {
+    if (is_int_value() && other.is_int_value()) {
+        return get_int_value() == other.get_int_value();
+    } else if (is_int_value() && !other.is_int_value()) {
+        return get_int_value() == other.get_float_value();
+    } else if (!is_int_value() && other.is_int_value()) {
+        return get_float_value() == other.get_int_value();
+    } else {
+        return get_float_value() == other.get_float_value();
+    }
+}
+
+bool DataObject::operator<=(const DataObject& other) const {
+    return *this < other || *this == other;
+}
+
+bool DataObject::operator>=(const DataObject& other) const {
+    return *this > other || *this == other;
+}
+
+bool DataObject::operator!=(const DataObject& other) const {
+    return !(*this == other);
+}
