@@ -12,8 +12,6 @@ int main() {
     obj1.set_vector_element(0, 10);
     obj1.set_vector_element(1, 20);
     obj1.set_vector_element(2, 30);
-    obj1.set_vector_element(3, 40);
-    obj1.set_vector_element(4, 50);
     
     std::cout << "Inserting DataObject 1:" << std::endl;
     obj1.print();
@@ -36,7 +34,6 @@ int main() {
     obj3.set_vector_element(0, 1);
     obj3.set_vector_element(1, 2);
     obj3.set_vector_element(2, 3);
-    obj3.set_vector_element(3, 4);
     
     std::cout << "Inserting DataObject 3:" << std::endl;
     obj3.print();
@@ -45,6 +42,7 @@ int main() {
     DataObject obj4(2, 25);
     obj4.set_vector_element(0, 99);
     obj4.set_vector_element(1, 88);
+    obj4.set_vector_element(2, 77);
     
     std::cout << "Inserting DataObject 4:" << std::endl;
     obj4.print();
