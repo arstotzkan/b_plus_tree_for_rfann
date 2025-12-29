@@ -252,9 +252,8 @@ std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key) {
     // Collect data from this leaf and subsequent leaves until max_key is reached
     uint32_t currentPid = pid;
     uint32_t visitedCount = 0;
-    const uint32_t MAX_LEAVES_TO_VISIT = 100; // Safety limit
     
-    while (currentPid != INVALID_PAGE && visitedCount < MAX_LEAVES_TO_VISIT) {
+    while (currentPid != INVALID_PAGE) {
         BPlusNode leaf;
         read(currentPid, leaf);
         
