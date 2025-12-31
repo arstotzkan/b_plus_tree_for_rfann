@@ -8,11 +8,9 @@ private:
     std::variant<int, float> numeric_value;
 
 public:
-    // Constructor with vector size and initial numeric value
-    DataObject(size_t vector_size, int value);
-    DataObject(size_t vector_size, float value);
-
-    // Copy constructor
+    // Constructors
+    DataObject(const std::vector<int>& vector, int value);
+    DataObject(const std::vector<int>& vector, float value);
     DataObject(const DataObject& other);
 
     // Assignment operator
@@ -51,3 +49,14 @@ public:
     bool operator>=(const DataObject& other) const;
     bool operator!=(const DataObject& other) const;
 };
+
+// Template function implementations (after class definition)
+template<size_t N>
+DataObject createDataObject(const int (&array)[N], int value) {
+    return DataObject(std::vector<int>(array, array + N), value);
+}
+
+template<size_t N>
+DataObject createDataObject(const int (&array)[N], float value) {
+    return DataObject(std::vector<int>(array, array + N), value);
+}

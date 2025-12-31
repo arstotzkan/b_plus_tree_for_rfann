@@ -2,14 +2,14 @@
 #include <iostream>
 #include <stdexcept>
 
-// Constructor with int value
-DataObject::DataObject(size_t vector_size, int value) 
-    : data_vector(vector_size, 0), numeric_value(value) {
+// Constructor with vector and int value
+DataObject::DataObject(const std::vector<int>& vector, int value)
+    : data_vector(vector), numeric_value(value) {
 }
 
-// Constructor with float value
-DataObject::DataObject(size_t vector_size, float value) 
-    : data_vector(vector_size, 0), numeric_value(value) {
+// Constructor with vector and float value
+DataObject::DataObject(const std::vector<int>& vector, float value)
+    : data_vector(vector), numeric_value(value) {
 }
 
 // Copy constructor
@@ -87,21 +87,17 @@ size_t DataObject::get_vector_size() const {
 void DataObject::print() const {
     std::cout << "DataObject:" << std::endl;
     std::cout << "  Vector: [";
-    for (size_t i = 0; i < data_vector.size(); ++i) {
+    for (size_t i = 0; i < data_vector.size(); i++) {
         std::cout << data_vector[i];
-        if (i < data_vector.size() - 1) {
-            std::cout << ", ";
-        }
+        if (i < data_vector.size() - 1) std::cout << ", ";
     }
     std::cout << "]" << std::endl;
     
-    std::cout << "  Value: ";
     if (is_int_value()) {
-        std::cout << get_int_value() << " (int)";
+        std::cout << "  Value: " << get_int_value() << " (int)" << std::endl;
     } else {
-        std::cout << get_float_value() << " (float)";
+        std::cout << "  Value: " << get_float_value() << " (float)" << std::endl;
     }
-    std::cout << std::endl;
 }
 
 void DataObject::clear_vector() {
@@ -110,15 +106,9 @@ void DataObject::clear_vector() {
 
 // Comparison operators for B+ tree ordering
 bool DataObject::operator<(const DataObject& other) const {
-    if (is_int_value() && other.is_int_value()) {
-        return get_int_value() < other.get_int_value();
-    } else if (is_int_value() && !other.is_int_value()) {
-        return get_int_value() < other.get_float_value();
-    } else if (!is_int_value() && other.is_int_value()) {
-        return get_float_value() < other.get_int_value();
-    } else {
-        return get_float_value() < other.get_float_value();
-    }
+    int this_val = is_int_value() ? get_int_value() : static_cast<int>(get_float_value());
+    int other_val = other.is_int_value() ? other.get_int_value() : static_cast<int>(other.get_float_value());
+    return this_val < other_val;
 }
 
 bool DataObject::operator>(const DataObject& other) const {
@@ -126,15 +116,9 @@ bool DataObject::operator>(const DataObject& other) const {
 }
 
 bool DataObject::operator==(const DataObject& other) const {
-    if (is_int_value() && other.is_int_value()) {
-        return get_int_value() == other.get_int_value();
-    } else if (is_int_value() && !other.is_int_value()) {
-        return get_int_value() == other.get_float_value();
-    } else if (!is_int_value() && other.is_int_value()) {
-        return get_float_value() == other.get_int_value();
-    } else {
-        return get_float_value() == other.get_float_value();
-    }
+    int this_val = is_int_value() ? get_int_value() : static_cast<int>(get_float_value());
+    int other_val = other.is_int_value() ? other.get_int_value() : static_cast<int>(other.get_float_value());
+    return this_val == other_val;
 }
 
 bool DataObject::operator<=(const DataObject& other) const {

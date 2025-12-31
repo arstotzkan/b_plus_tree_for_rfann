@@ -186,10 +186,11 @@ DataObject* DiskBPlusTree::search_data_object(const DataObject& obj) {
     for (int i = 0; i < node.keyCount; i++) {
         if (node.keys[i] == key) {
             // Reconstruct DataObject from fixed-size array
-            DataObject* result = new DataObject(node.vector_sizes[i], key);
+            std::vector<int> vec(node.vector_sizes[i]);
             for (int j = 0; j < node.vector_sizes[i] && j < MAX_VECTOR_SIZE; j++) {
-                result->set_vector_element(j, node.data_vectors[i][j]);
+                vec[j] = node.data_vectors[i][j];
             }
+            DataObject* result = new DataObject(vec, key);
             return result;
         }
     }
@@ -216,10 +217,11 @@ DataObject* DiskBPlusTree::search_data_object(int key) {
     for (int i = 0; i < node.keyCount; i++) {
         if (node.keys[i] == key) {
             // Reconstruct DataObject from fixed-size array
-            DataObject* result = new DataObject(node.vector_sizes[i], key);
+            std::vector<int> vec(node.vector_sizes[i]);
             for (int j = 0; j < node.vector_sizes[i] && j < MAX_VECTOR_SIZE; j++) {
-                result->set_vector_element(j, node.data_vectors[i][j]);
+                vec[j] = node.data_vectors[i][j];
             }
+            DataObject* result = new DataObject(vec, key);
             return result;
         }
     }
@@ -259,10 +261,11 @@ std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key) {
         
         for (int i = 0; i < leaf.keyCount; i++) {
             if (leaf.keys[i] >= min_key && leaf.keys[i] <= max_key) {
-                DataObject* result = new DataObject(leaf.vector_sizes[i], leaf.keys[i]);
+                std::vector<int> vec(leaf.vector_sizes[i]);
                 for (int j = 0; j < leaf.vector_sizes[i] && j < MAX_VECTOR_SIZE; j++) {
-                    result->set_vector_element(j, leaf.data_vectors[i][j]);
+                    vec[j] = leaf.data_vectors[i][j];
                 }
+                DataObject* result = new DataObject(vec, leaf.keys[i]);
                 results.push_back(result);
             }
             else if (leaf.keys[i] > max_key) {
