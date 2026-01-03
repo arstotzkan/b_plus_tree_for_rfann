@@ -95,30 +95,22 @@ void print_usage(const char* program_name) {
     std::cout << "  --index, -i      Path to the B+ tree index file (required)" << std::endl;
     std::cout << "  --queries, -q    Path to query vectors file (.fvecs format)" << std::endl;
     std::cout << "  --groundtruth    Path to groundtruth file (.ivecs format)" << std::endl;
-    std::cout << "  --min            Minimum range for RFANN queries" << std::endl;
-    std::cout << "  --max            Maximum range for RFANN queries" << std::endl;
-    std::cout << "  --K, -k          Number of nearest neighbors (default: 10)" << std::endl;
     std::cout << "  --num-queries    Number of queries to run (default: all)" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  Batch RFANN test:" << std::endl;
     std::cout << "    " << program_name << " --index data/sift_index.bpt --queries data/dataset/siftsmall_query.fvecs \\" << std::endl;
-    std::cout << "      --groundtruth data/dataset/siftsmall_groundtruth.ivecs --min 0 --max 1000 --K 10" << std::endl;
+    std::cout << "      --groundtruth data/dataset/siftsmall_groundtruth.ivecs" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
     std::string index_path;
     std::string queries_path;
     std::string groundtruth_path;
-    int min_key = 0;
-    int max_key = -1;
-    int k_neighbors = 10;
     int num_queries = -1;
     bool has_index = false;
     bool has_queries = false;
     bool has_groundtruth = false;
-    bool has_min = false;
-    bool has_max = false;
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
@@ -133,14 +125,6 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--groundtruth" && i + 1 < argc) {
             groundtruth_path = argv[++i];
             has_groundtruth = true;
-        } else if (arg == "--min" && i + 1 < argc) {
-            min_key = std::atoi(argv[++i]);
-            has_min = true;
-        } else if (arg == "--max" && i + 1 < argc) {
-            max_key = std::atoi(argv[++i]);
-            has_max = true;
-        } else if ((arg == "--K" || arg == "-k") && i + 1 < argc) {
-            k_neighbors = std::atoi(argv[++i]);
         } else if (arg == "--num-queries" && i + 1 < argc) {
             num_queries = std::atoi(argv[++i]);
         } else if (arg == "--help" || arg == "-h") {
@@ -160,13 +144,20 @@ int main(int argc, char* argv[]) {
 
     DiskBPlusTree dataTree(index_path);
 
+    auto [min_key, max_key] = dataTree.get_key_range();
+    if (max_key < min_key) {
+        std::cerr << "Error: Tree appears empty" << std::endl;
+        return 1;
+    }
+    std::cout << "Range filter (from tree): [" << min_key << ", " << max_key << "]" << std::endl;
+
     // If no queries file provided, run simple tests
     if (!has_queries) {
         std::cout << std::endl << "No query file provided. Running simple tests..." << std::endl;
         
         // Simple range search test
-        int test_min = has_min ? min_key : 0;
-        int test_max = has_max ? max_key : 100;
+        int test_min = min_key;
+        int test_max = max_key;
         
         auto start = std::chrono::high_resolution_clock::now();
         std::vector<DataObject*> results = dataTree.search_range(test_min, test_max);
@@ -192,18 +183,29 @@ int main(int argc, char* argv[]) {
 
     // Load groundtruth if provided
     std::vector<std::vector<int32_t>> groundtruth;
+    int k_neighbors = -1;
     if (has_groundtruth) {
         std::cout << "Loading groundtruth from: " << groundtruth_path << std::endl;
         groundtruth = load_ivecs_groundtruth(groundtruth_path);
         std::cout << "Loaded " << groundtruth.size() << " groundtruth entries" << std::endl;
+
+        if (groundtruth.empty() || groundtruth[0].empty()) {
+            std::cerr << "Error: Groundtruth file has no neighbors" << std::endl;
+            return 1;
+        }
+        k_neighbors = static_cast<int>(groundtruth[0].size());
+        for (size_t i = 1; i < groundtruth.size(); i++) {
+            if (groundtruth[i].size() != groundtruth[0].size()) {
+                std::cerr << "Error: Groundtruth file has inconsistent K at row " << i
+                          << " (expected " << groundtruth[0].size() << ", got " << groundtruth[i].size() << ")" << std::endl;
+                return 1;
+            }
+        }
     }
 
-    // Set range
-    if (!has_max) {
-        max_key = 10000;  // Default max range
+    if (has_groundtruth) {
+        std::cout << "K (from groundtruth): " << k_neighbors << std::endl;
     }
-    std::cout << "Range filter: [" << min_key << ", " << max_key << "]" << std::endl;
-    std::cout << "K: " << k_neighbors << std::endl;
     std::cout << std::endl;
 
     // Limit number of queries if specified
@@ -245,8 +247,10 @@ int main(int argc, char* argv[]) {
 
         // Get top-K
         std::vector<int> retrieved;
-        for (int i = 0; i < std::min(k_neighbors, static_cast<int>(distances.size())); i++) {
-            retrieved.push_back(distances[i].second);
+        if (has_groundtruth) {
+            for (int i = 0; i < std::min(k_neighbors, static_cast<int>(distances.size())); i++) {
+                retrieved.push_back(distances[i].second);
+            }
         }
         auto knn_end = std::chrono::high_resolution_clock::now();
         total_knn_time += std::chrono::duration_cast<std::chrono::microseconds>(knn_end - knn_start).count();

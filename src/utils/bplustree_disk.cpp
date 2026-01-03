@@ -420,6 +420,47 @@ void DiskBPlusTree::print_tree_recursive(uint32_t pid, int level) {
     }
 }
 
+std::pair<int, int> DiskBPlusTree::get_key_range() {
+    uint32_t pid = pm.getRoot();
+    if (pid == INVALID_PAGE) {
+        return {0, -1};
+    }
+
+    BPlusNode node;
+    while (true) {
+        read(pid, node);
+        if (node.isLeaf) {
+            break;
+        }
+        pid = node.children[0];
+    }
+
+    if (node.keyCount == 0) {
+        return {0, -1};
+    }
+
+    int min_key = node.keys[0];
+    int max_key = node.keys[node.keyCount - 1];
+
+    uint32_t currentPid = pid;
+    while (currentPid != INVALID_PAGE) {
+        BPlusNode leaf;
+        read(currentPid, leaf);
+
+        if (leaf.keyCount > 0) {
+            max_key = leaf.keys[leaf.keyCount - 1];
+        }
+
+        uint32_t nextPid = leaf.next;
+        if (nextPid == INVALID_PAGE || nextPid == currentPid) {
+            break;
+        }
+        currentPid = nextPid;
+    }
+
+    return {min_key, max_key};
+}
+
 int DiskBPlusTree::get_min_keys() {
     return (ORDER - 1) / 2;
 }

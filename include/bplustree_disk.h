@@ -3,6 +3,7 @@
 #include "page_manager.h"
 #include "DataObject.h"
 #include <iostream>
+#include <utility>
 #include <vector>
 #include <string>
 
@@ -17,6 +18,7 @@ public:
     std::vector<DataObject*> search_range(float min_key, float max_key);
     bool search(const DataObject& obj);
     void print_tree();
+    std::pair<int, int> get_key_range();
 
 private:
     PageManager pm;
