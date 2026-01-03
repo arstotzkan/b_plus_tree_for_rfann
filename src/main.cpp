@@ -15,14 +15,14 @@ int main() {
     DiskBPlusTree dataTree("data/test_data_index2.bpt");
 
     // Create and insert DataObject with random values
-    for (int i = 1; i <= 200; i++) {
+    for (int i = 1; i <= 1000; i++) {
         int arr[3];
         for (int j = 0; j < 3; j++) {
             arr[j] = vector_dist(rng);
         }
         int value = value_dist(rng);
         
-        DataObject obj = createDataObject(arr, value);
+        DataObject* obj = new DataObject(createDataObject(arr, value));
         
         std::cout << "Inserting DataObject " << i << " with value " << value << ": [";
         for (int j = 0; j < 3; j++) {
@@ -31,11 +31,26 @@ int main() {
         }
         std::cout << "]" << std::endl;
         
-        dataTree.insert_data_object(obj);
+        try {
+            dataTree.insert_data_object(*obj);
+            std::cout << "Successfully inserted DataObject " << i << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "ERROR inserting DataObject " << i << ": " << e.what() << std::endl;
+            delete obj;
+            break;
+        } catch (...) {
+            std::cout << "UNKNOWN ERROR inserting DataObject " << i << std::endl;
+            delete obj;
+            break;
+        }
+        
+        delete obj; // Explicitly delete after insertion to prevent memory leaks
+        
+        // Add progress indicator every 10 insertions
+        if (i % 10 == 0) {
+            std::cout << "Progress: " << i << " objects inserted" << std::endl;
+        }
     }
-
-    
-
 
     std::cout << std::endl << "=== Searching DataObjects ===" << std::endl;
     
