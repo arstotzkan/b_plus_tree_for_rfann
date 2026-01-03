@@ -12,14 +12,26 @@ set(COMMON_SOURCES
     DataObject.cpp
 )
 
-# Build index executable
+# Build index with synthetic data executable
 add_executable(build_index
     build_index_with_synthetic_data.cpp
     ${COMMON_SOURCES}
 )
 
-# Search index executable
+# Build index from binary file executable
+add_executable(build_index_binary
+    build_index_from_binary.cpp
+    ${COMMON_SOURCES}
+)
+
+# Search index executable (range search with flags)
 add_executable(search_index
     search_from_index.cpp
+    ${COMMON_SOURCES}
+)
+
+# Search index test executable (comprehensive tests)
+add_executable(search_index_test
+    search_from_index_test.cpp
     ${COMMON_SOURCES}
 )

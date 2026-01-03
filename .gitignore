@@ -47,6 +47,6 @@
 
 build/**/*
 data/*
-
+logs/*
 lib/*
 bin/*

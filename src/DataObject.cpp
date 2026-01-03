@@ -85,18 +85,17 @@ size_t DataObject::get_vector_size() const {
 
 // Utility functions
 void DataObject::print() const {
-    std::cout << "DataObject:" << std::endl;
-    std::cout << "  Vector: [";
+    std::cout << "[";
     for (size_t i = 0; i < data_vector.size(); i++) {
         std::cout << data_vector[i];
         if (i < data_vector.size() - 1) std::cout << ", ";
     }
-    std::cout << "]" << std::endl;
+    std::cout << "]";
     
     if (is_int_value()) {
-        std::cout << "  Value: " << get_int_value() << " (int)" << std::endl;
+        std::cout << "  (" << get_int_value() << ")" << std::endl;
     } else {
-        std::cout << "  Value: " << get_float_value() << " (float)" << std::endl;
+        std::cout << "  (" << get_float_value() << ")" << std::endl;
     }
 }
 
