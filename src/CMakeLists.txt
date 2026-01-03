@@ -5,11 +5,11 @@ set(CMAKE_CXX_STANDARD 17)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../include)
 
-# Common source files (excluding main files)
+# Common source files (in utils subdirectory)
 set(COMMON_SOURCES
-    page_manager.cpp
-    bplustree_disk.cpp
-    DataObject.cpp
+    utils/page_manager.cpp
+    utils/bplustree_disk.cpp
+    utils/DataObject.cpp
 )
 
 # Build index with synthetic data executable
