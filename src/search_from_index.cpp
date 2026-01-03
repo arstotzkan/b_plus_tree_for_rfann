@@ -64,7 +64,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Found " << results.size() << " objects in range [" << min_key << ", " << max_key << "]:" << std::endl;
     
     for (size_t i = 0; i < results.size(); i++) {
-        std::cout << "  Object " << (i+1) << ": ";
+        std::cout << "  #" << (i+1) << ": ";
         results[i]->print();
         delete results[i];
     }

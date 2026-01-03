@@ -73,7 +73,7 @@ int main(int argc, char* argv[]) {
     std::vector<DataObject*> range_results = dataTree.search_range(20, 80);
     std::cout << "Found " << range_results.size() << " objects in range [20, 80]:" << std::endl;
     for (size_t i = 0; i < range_results.size(); i++) {
-        std::cout << "  Object " << (i+1) << ": ";
+        std::cout << "  #" << (i+1) << ": ";
         range_results[i]->print();
         delete range_results[i];
     }
@@ -82,7 +82,7 @@ int main(int argc, char* argv[]) {
     std::vector<DataObject*> range_results2 = dataTree.search_range(90, 105);
     std::cout << "Found " << range_results2.size() << " objects in range [90, 105]:" << std::endl;
     for (size_t i = 0; i < range_results2.size(); i++) {
-        std::cout << "  Object " << (i+1) << ": ";
+        std::cout << "  #" << (i+1) << ": ";
         range_results2[i]->print();
         delete range_results2[i];
     }
