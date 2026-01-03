@@ -7,9 +7,10 @@
 #include <cmath>
 #include <algorithm>
 #include <sstream>
+#include <chrono>
 
 // Calculate Euclidean distance between two vectors
-double calculate_distance(const std::vector<int>& v1, const std::vector<int>& v2) {
+double calculate_distance(const std::vector<float>& v1, const std::vector<float>& v2) {
     double sum = 0.0;
     size_t min_size = std::min(v1.size(), v2.size());
     for (size_t i = 0; i < min_size; i++) {
@@ -19,13 +20,13 @@ double calculate_distance(const std::vector<int>& v1, const std::vector<int>& v2
     return std::sqrt(sum);
 }
 
-// Parse comma-separated vector string like "1,2,3" into vector<int>
-std::vector<int> parse_vector(const std::string& str) {
-    std::vector<int> result;
+// Parse comma-separated vector string like "1.0,2.0,3.0" into vector<float>
+std::vector<float> parse_vector(const std::string& str) {
+    std::vector<float> result;
     std::stringstream ss(str);
     std::string item;
     while (std::getline(ss, item, ',')) {
-        result.push_back(std::atoi(item.c_str()));
+        result.push_back(static_cast<float>(std::atof(item.c_str())));
     }
     return result;
 }
@@ -40,6 +41,7 @@ void print_usage(const char* program_name) {
     std::cout << "  --value, -v   Search for all objects with a specific value" << std::endl;
     std::cout << "  --vector      Query vector for KNN search (comma-separated, e.g., 1,2,3)" << std::endl;
     std::cout << "  --K, -k       Number of nearest neighbors to return (requires --vector)" << std::endl;
+    std::cout << "  --limit       Maximum number of results to return (for memory efficiency)" << std::endl;
     std::cout << std::endl;
     std::cout << "Note: --value and --min/--max are mutually exclusive" << std::endl;
     std::cout << std::endl;
@@ -55,8 +57,9 @@ int main(int argc, char* argv[]) {
     int min_key = -1;
     int max_key = -1;
     int search_value = -1;
-    std::vector<int> query_vector;
+    std::vector<float> query_vector;
     int k_neighbors = -1;
+    int result_limit = -1;  // -1 means no limit
     bool has_index = false;
     bool has_min = false;
     bool has_max = false;
@@ -86,6 +89,8 @@ int main(int argc, char* argv[]) {
         } else if ((arg == "--K" || arg == "-k") && i + 1 < argc) {
             k_neighbors = std::atoi(argv[++i]);
             has_k = true;
+        } else if (arg == "--limit" && i + 1 < argc) {
+            result_limit = std::atoi(argv[++i]);
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -130,6 +135,9 @@ int main(int argc, char* argv[]) {
 
     DiskBPlusTree dataTree(index_path);
 
+    // Start timing
+    auto query_start = std::chrono::high_resolution_clock::now();
+
     // Get results based on search type
     std::vector<DataObject*> results;
     
@@ -146,6 +154,9 @@ int main(int argc, char* argv[]) {
         std::cout << "Range: [" << min_key << ", " << max_key << "]" << std::endl;
         results = dataTree.search_range(min_key, max_key);
     }
+
+    auto range_end = std::chrono::high_resolution_clock::now();
+    auto range_duration = std::chrono::duration_cast<std::chrono::microseconds>(range_end - query_start);
 
     if (has_vector) {
         std::cout << "Query vector: [";
@@ -185,15 +196,34 @@ int main(int argc, char* argv[]) {
         for (auto& pair : distances) {
             delete pair.second;
         }
+
+        auto knn_end = std::chrono::high_resolution_clock::now();
+        auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(knn_end - query_start);
+        std::cout << std::endl << "Query execution time:" << std::endl;
+        std::cout << "  Range search: " << range_duration.count() << " us" << std::endl;
+        std::cout << "  Total (with KNN): " << total_duration.count() << " us" << std::endl;
     } else {
         // Regular search output
-        std::cout << "Found " << results.size() << " objects:" << std::endl;
+        size_t display_count = results.size();
+        if (result_limit > 0 && static_cast<size_t>(result_limit) < display_count) {
+            display_count = static_cast<size_t>(result_limit);
+        }
+        std::cout << "Found " << results.size() << " objects";
+        if (display_count < results.size()) {
+            std::cout << " (showing first " << display_count << ")";
+        }
+        std::cout << ":" << std::endl;
         
-        for (size_t i = 0; i < results.size(); i++) {
+        for (size_t i = 0; i < display_count; i++) {
             std::cout << "  #" << (i+1) << ": ";
             results[i]->print();
+        }
+        // Clean up all results
+        for (size_t i = 0; i < results.size(); i++) {
             delete results[i];
         }
+
+        std::cout << std::endl << "Query execution time: " << range_duration.count() << " us" << std::endl;
     }
 
     return 0;

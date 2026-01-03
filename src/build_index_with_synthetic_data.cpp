@@ -5,6 +5,7 @@
 #include <ctime>
 #include <cstdlib>
 #include <string>
+#include <chrono>
 
 void print_usage(const char* program_name) {
     std::cout << "Usage: " << program_name << " --index <path> --size <count>" << std::endl;
@@ -58,6 +59,9 @@ int main(int argc, char* argv[]) {
     std::cout << "Data size: " << data_size << std::endl;
     std::cout << std::endl;
 
+    // Start timing
+    auto start_time = std::chrono::high_resolution_clock::now();
+
     DiskBPlusTree dataTree(index_path);
 
     // Create and insert DataObjects with random values
@@ -92,7 +96,13 @@ int main(int argc, char* argv[]) {
         delete obj;
     }
 
+    // End timing
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
     std::cout << std::endl << "=== Index Build Complete ===" << std::endl;
+    std::cout << "Total objects inserted: " << data_size << std::endl;
+    std::cout << "Build time: " << duration.count() << " ms (" << (duration.count() / 1000.0) << " seconds)" << std::endl;
     std::cout << "B+ Tree structure:" << std::endl;
     dataTree.print_tree();
 

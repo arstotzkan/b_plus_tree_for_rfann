@@ -1,15 +1,19 @@
 #include "bplustree_disk.h"
 #include "DataObject.h"
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <cstdlib>
 #include <cmath>
 #include <algorithm>
 #include <sstream>
+#include <chrono>
+#include <set>
+#include <cstdint>
 
 // Calculate Euclidean distance between two vectors
-double calculate_distance(const std::vector<int>& v1, const std::vector<int>& v2) {
+double calculate_distance(const std::vector<float>& v1, const std::vector<float>& v2) {
     double sum = 0.0;
     size_t min_size = std::min(v1.size(), v2.size());
     for (size_t i = 0; i < min_size; i++) {
@@ -19,43 +23,102 @@ double calculate_distance(const std::vector<int>& v1, const std::vector<int>& v2
     return std::sqrt(sum);
 }
 
-// Parse comma-separated vector string like "1,2,3" into vector<int>
-std::vector<int> parse_vector(const std::string& str) {
-    std::vector<int> result;
+// Parse comma-separated vector string into vector<float>
+std::vector<float> parse_vector(const std::string& str) {
+    std::vector<float> result;
     std::stringstream ss(str);
     std::string item;
     while (std::getline(ss, item, ',')) {
-        result.push_back(std::atoi(item.c_str()));
+        result.push_back(static_cast<float>(std::atof(item.c_str())));
     }
     return result;
 }
 
+// Load queries from fvecs file
+std::vector<std::vector<float>> load_fvecs_queries(const std::string& path) {
+    std::vector<std::vector<float>> queries;
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Error: Cannot open query file: " << path << std::endl;
+        return queries;
+    }
+
+    int32_t dimension;
+    while (file.read(reinterpret_cast<char*>(&dimension), sizeof(int32_t))) {
+        std::vector<float> vec(dimension);
+        file.read(reinterpret_cast<char*>(vec.data()), dimension * sizeof(float));
+        if (file) {
+            queries.push_back(vec);
+        }
+    }
+    return queries;
+}
+
+// Load groundtruth from ivecs file
+std::vector<std::vector<int32_t>> load_ivecs_groundtruth(const std::string& path) {
+    std::vector<std::vector<int32_t>> groundtruth;
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Error: Cannot open groundtruth file: " << path << std::endl;
+        return groundtruth;
+    }
+
+    int32_t count;
+    while (file.read(reinterpret_cast<char*>(&count), sizeof(int32_t))) {
+        std::vector<int32_t> neighbors(count);
+        file.read(reinterpret_cast<char*>(neighbors.data()), count * sizeof(int32_t));
+        if (file) {
+            groundtruth.push_back(neighbors);
+        }
+    }
+    return groundtruth;
+}
+
+// Calculate recall@K
+double calculate_recall(const std::vector<int>& retrieved, const std::vector<int32_t>& groundtruth, int k) {
+    if (groundtruth.empty() || k <= 0) return 0.0;
+    
+    std::set<int> gt_set(groundtruth.begin(), groundtruth.begin() + std::min(k, static_cast<int>(groundtruth.size())));
+    int hits = 0;
+    for (int i = 0; i < std::min(k, static_cast<int>(retrieved.size())); i++) {
+        if (gt_set.count(retrieved[i]) > 0) {
+            hits++;
+        }
+    }
+    return static_cast<double>(hits) / std::min(k, static_cast<int>(gt_set.size()));
+}
+
 void print_usage(const char* program_name) {
-    std::cout << "Usage: " << program_name << " --index <path> [--value <value>] [--vector <v1,v2,...>] [--K <count>]" << std::endl;
+    std::cout << "Usage: " << program_name << " --index <path> [options]" << std::endl;
     std::cout << std::endl;
     std::cout << "Flags:" << std::endl;
-    std::cout << "  --index, -i   Path to the B+ tree index file (required)" << std::endl;
-    std::cout << "  --value, -v   Search for all objects with a specific value" << std::endl;
-    std::cout << "  --vector      Query vector for KNN search (comma-separated, e.g., 1,2,3)" << std::endl;
-    std::cout << "  --K, -k       Number of nearest neighbors to return (requires --vector)" << std::endl;
-    std::cout << std::endl;
-    std::cout << "Note: If no flags besides --index are specified, runs predefined tests" << std::endl;
+    std::cout << "  --index, -i      Path to the B+ tree index file (required)" << std::endl;
+    std::cout << "  --queries, -q    Path to query vectors file (.fvecs format)" << std::endl;
+    std::cout << "  --groundtruth    Path to groundtruth file (.ivecs format)" << std::endl;
+    std::cout << "  --min            Minimum range for RFANN queries" << std::endl;
+    std::cout << "  --max            Maximum range for RFANN queries" << std::endl;
+    std::cout << "  --K, -k          Number of nearest neighbors (default: 10)" << std::endl;
+    std::cout << "  --num-queries    Number of queries to run (default: all)" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
-    std::cout << "  Run all tests:   " << program_name << " --index data/my_index.bpt" << std::endl;
-    std::cout << "  Value search:    " << program_name << " --index data/my_index.bpt --value 42" << std::endl;
-    std::cout << "  KNN at value:    " << program_name << " --index data/my_index.bpt --value 42 --vector 10,20,30 --K 5" << std::endl;
+    std::cout << "  Batch RFANN test:" << std::endl;
+    std::cout << "    " << program_name << " --index data/sift_index.bpt --queries data/dataset/siftsmall_query.fvecs \\" << std::endl;
+    std::cout << "      --groundtruth data/dataset/siftsmall_groundtruth.ivecs --min 0 --max 1000 --K 10" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
     std::string index_path;
-    int search_value = -1;
-    std::vector<int> query_vector;
-    int k_neighbors = -1;
+    std::string queries_path;
+    std::string groundtruth_path;
+    int min_key = 0;
+    int max_key = -1;
+    int k_neighbors = 10;
+    int num_queries = -1;
     bool has_index = false;
-    bool has_value = false;
-    bool has_vector = false;
-    bool has_k = false;
+    bool has_queries = false;
+    bool has_groundtruth = false;
+    bool has_min = false;
+    bool has_max = false;
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
@@ -64,15 +127,22 @@ int main(int argc, char* argv[]) {
         if ((arg == "--index" || arg == "-i") && i + 1 < argc) {
             index_path = argv[++i];
             has_index = true;
-        } else if ((arg == "--value" || arg == "-v") && i + 1 < argc) {
-            search_value = std::atoi(argv[++i]);
-            has_value = true;
-        } else if (arg == "--vector" && i + 1 < argc) {
-            query_vector = parse_vector(argv[++i]);
-            has_vector = true;
+        } else if ((arg == "--queries" || arg == "-q") && i + 1 < argc) {
+            queries_path = argv[++i];
+            has_queries = true;
+        } else if (arg == "--groundtruth" && i + 1 < argc) {
+            groundtruth_path = argv[++i];
+            has_groundtruth = true;
+        } else if (arg == "--min" && i + 1 < argc) {
+            min_key = std::atoi(argv[++i]);
+            has_min = true;
+        } else if (arg == "--max" && i + 1 < argc) {
+            max_key = std::atoi(argv[++i]);
+            has_max = true;
         } else if ((arg == "--K" || arg == "-k") && i + 1 < argc) {
             k_neighbors = std::atoi(argv[++i]);
-            has_k = true;
+        } else if (arg == "--num-queries" && i + 1 < argc) {
+            num_queries = std::atoi(argv[++i]);
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -85,124 +155,134 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (has_k && !has_vector) {
-        std::cerr << "Error: --K requires --vector to be specified" << std::endl;
-        print_usage(argv[0]);
-        return 1;
-    }
-
-    if (has_k && k_neighbors <= 0) {
-        std::cerr << "Error: K must be a positive integer" << std::endl;
-        return 1;
-    }
-
-    std::cout << "=== B+ Tree Index Search Test ===" << std::endl;
+    std::cout << "=== RFANN B+ Tree Benchmark ===" << std::endl;
     std::cout << "Index path: " << index_path << std::endl;
-    std::cout << std::endl;
 
     DiskBPlusTree dataTree(index_path);
 
-    if (has_value) {
-        // Value search mode - get all objects with this value
-        std::cout << "=== Searching for value " << search_value << " ===" << std::endl;
+    // If no queries file provided, run simple tests
+    if (!has_queries) {
+        std::cout << std::endl << "No query file provided. Running simple tests..." << std::endl;
         
-        if (has_vector) {
-            std::cout << "Query vector: [";
-            for (size_t i = 0; i < query_vector.size(); i++) {
-                std::cout << query_vector[i];
-                if (i < query_vector.size() - 1) std::cout << ", ";
-            }
-            std::cout << "]" << std::endl;
-        }
-        if (has_k) {
-            std::cout << "K nearest neighbors: " << k_neighbors << std::endl;
-        }
-        std::cout << std::endl;
-
-        std::vector<DataObject*> results = dataTree.search_range(search_value, search_value);
+        // Simple range search test
+        int test_min = has_min ? min_key : 0;
+        int test_max = has_max ? max_key : 100;
         
-        if (has_vector && has_k) {
-            // KNN search
-            std::vector<std::pair<double, DataObject*>> distances;
-            for (DataObject* obj : results) {
-                double dist = calculate_distance(query_vector, obj->get_vector());
-                distances.push_back({dist, obj});
-            }
-
-            std::sort(distances.begin(), distances.end(), 
-                [](const auto& a, const auto& b) { return a.first < b.first; });
-
-            int output_count = std::min(k_neighbors, static_cast<int>(distances.size()));
-            std::cout << "Found " << results.size() << " objects, showing " << output_count << " nearest neighbors:" << std::endl;
-            
-            for (int i = 0; i < output_count; i++) {
-                std::cout << "  #" << (i+1) << " (dist=" << distances[i].first << "): ";
-                distances[i].second->print();
-            }
-
-            for (auto& pair : distances) {
-                delete pair.second;
-            }
-        } else {
-            std::cout << "Found " << results.size() << " objects:" << std::endl;
-            for (size_t i = 0; i < results.size(); i++) {
-                std::cout << "  #" << (i+1) << ": ";
-                results[i]->print();
-                delete results[i];
-            }
+        auto start = std::chrono::high_resolution_clock::now();
+        std::vector<DataObject*> results = dataTree.search_range(test_min, test_max);
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        
+        std::cout << "Range search [" << test_min << ", " << test_max << "]: " << results.size() << " results in " << duration.count() << " us" << std::endl;
+        
+        for (DataObject* obj : results) {
+            delete obj;
         }
         return 0;
     }
 
-    // Run predefined tests
-    std::cout << "=== Searching DataObjects ===" << std::endl;
+    // Load queries
+    std::cout << "Loading queries from: " << queries_path << std::endl;
+    std::vector<std::vector<float>> queries = load_fvecs_queries(queries_path);
+    if (queries.empty()) {
+        std::cerr << "Error: No queries loaded" << std::endl;
+        return 1;
+    }
+    std::cout << "Loaded " << queries.size() << " queries (dimension: " << queries[0].size() << ")" << std::endl;
 
-    // Test search with int keys
-    int search_keys[] = {42, 3, 100, 999};
-    for (int key : search_keys) {
-        DataObject* found = dataTree.search_data_object(key);
-        if (found) {
-            std::cout << "Found DataObject with key " << key << ": ";
-            found->print();
-            delete found;
-        } else {
-            std::cout << "DataObject with key " << key << " not found" << std::endl;
+    // Load groundtruth if provided
+    std::vector<std::vector<int32_t>> groundtruth;
+    if (has_groundtruth) {
+        std::cout << "Loading groundtruth from: " << groundtruth_path << std::endl;
+        groundtruth = load_ivecs_groundtruth(groundtruth_path);
+        std::cout << "Loaded " << groundtruth.size() << " groundtruth entries" << std::endl;
+    }
+
+    // Set range
+    if (!has_max) {
+        max_key = 10000;  // Default max range
+    }
+    std::cout << "Range filter: [" << min_key << ", " << max_key << "]" << std::endl;
+    std::cout << "K: " << k_neighbors << std::endl;
+    std::cout << std::endl;
+
+    // Limit number of queries if specified
+    int queries_to_run = (num_queries > 0 && num_queries < static_cast<int>(queries.size())) 
+                         ? num_queries : static_cast<int>(queries.size());
+
+    // Run batch queries
+    std::cout << "=== Running " << queries_to_run << " RFANN Queries ===" << std::endl;
+    
+    double total_recall = 0.0;
+    long long total_range_time = 0;
+    long long total_knn_time = 0;
+    int valid_queries = 0;
+
+    for (int q = 0; q < queries_to_run; q++) {
+        const std::vector<float>& query_vec = queries[q];
+
+        // Range search
+        auto range_start = std::chrono::high_resolution_clock::now();
+        std::vector<DataObject*> range_results = dataTree.search_range(min_key, max_key);
+        auto range_end = std::chrono::high_resolution_clock::now();
+        total_range_time += std::chrono::duration_cast<std::chrono::microseconds>(range_end - range_start).count();
+
+        if (range_results.empty()) {
+            continue;
+        }
+
+        // KNN within range
+        auto knn_start = std::chrono::high_resolution_clock::now();
+        std::vector<std::pair<double, int>> distances;
+        for (DataObject* obj : range_results) {
+            double dist = calculate_distance(query_vec, obj->get_vector());
+            int key = obj->is_int_value() ? obj->get_int_value() : static_cast<int>(obj->get_float_value());
+            distances.push_back({dist, key});
+        }
+
+        std::sort(distances.begin(), distances.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+
+        // Get top-K
+        std::vector<int> retrieved;
+        for (int i = 0; i < std::min(k_neighbors, static_cast<int>(distances.size())); i++) {
+            retrieved.push_back(distances[i].second);
+        }
+        auto knn_end = std::chrono::high_resolution_clock::now();
+        total_knn_time += std::chrono::duration_cast<std::chrono::microseconds>(knn_end - knn_start).count();
+
+        // Calculate recall if groundtruth available
+        if (has_groundtruth && q < static_cast<int>(groundtruth.size())) {
+            double recall = calculate_recall(retrieved, groundtruth[q], k_neighbors);
+            total_recall += recall;
+            valid_queries++;
+        }
+
+        // Clean up
+        for (DataObject* obj : range_results) {
+            delete obj;
+        }
+
+        // Progress
+        if ((q + 1) % 10 == 0 || q == queries_to_run - 1) {
+            std::cout << "\rProgress: " << (q + 1) << "/" << queries_to_run << " queries" << std::flush;
         }
     }
+    std::cout << std::endl;
 
-    // Test search with float key
-    std::cout << std::endl << "=== Testing Float Key Search ===" << std::endl;
-    DataObject* found_float = dataTree.search_data_object(3.14f);
-    if (found_float) {
-        std::cout << "Found with float key 3.14: ";
-        found_float->print();
-        delete found_float;
-    } else {
-        std::cout << "Not found with float key 3.14" << std::endl;
+    // Print results
+    std::cout << std::endl << "=== Benchmark Results ===" << std::endl;
+    std::cout << "Total queries: " << queries_to_run << std::endl;
+    std::cout << "Average range search time: " << (total_range_time / queries_to_run) << " us" << std::endl;
+    std::cout << "Average KNN time: " << (total_knn_time / queries_to_run) << " us" << std::endl;
+    std::cout << "Average total query time: " << ((total_range_time + total_knn_time) / queries_to_run) << " us" << std::endl;
+    std::cout << "Total time: " << ((total_range_time + total_knn_time) / 1000.0) << " ms" << std::endl;
+    std::cout << "Queries per second: " << (queries_to_run * 1000000.0 / (total_range_time + total_knn_time)) << std::endl;
+
+    if (has_groundtruth && valid_queries > 0) {
+        std::cout << std::endl << "=== Recall ===" << std::endl;
+        std::cout << "Recall@" << k_neighbors << ": " << (total_recall / valid_queries * 100.0) << "%" << std::endl;
     }
-
-    // Test range searches
-    std::cout << std::endl << "=== Testing Range Search (20 to 80) ===" << std::endl;
-    std::vector<DataObject*> range_results = dataTree.search_range(20, 80);
-    std::cout << "Found " << range_results.size() << " objects in range [20, 80]:" << std::endl;
-    for (size_t i = 0; i < range_results.size(); i++) {
-        std::cout << "  #" << (i+1) << ": ";
-        range_results[i]->print();
-        delete range_results[i];
-    }
-
-    std::cout << std::endl << "=== Testing Range Search (90 to 105) ===" << std::endl;
-    std::vector<DataObject*> range_results2 = dataTree.search_range(90, 105);
-    std::cout << "Found " << range_results2.size() << " objects in range [90, 105]:" << std::endl;
-    for (size_t i = 0; i < range_results2.size(); i++) {
-        std::cout << "  #" << (i+1) << ": ";
-        range_results2[i]->print();
-        delete range_results2[i];
-    }
-
-    std::cout << std::endl << "=== Testing Range Search (300 to 500) ===" << std::endl;
-    std::vector<DataObject*> high_range_results = dataTree.search_range(300, 500);
-    std::cout << "Found " << high_range_results.size() << " objects in range [300, 500]" << std::endl;
 
     return 0;
 }

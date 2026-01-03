@@ -64,7 +64,7 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
         }
         
         // Copy vector data
-        const std::vector<int>& vec = obj.get_vector();
+        const std::vector<float>& vec = obj.get_vector();
         root.vector_sizes[0] = vec.size();
         for (size_t j = 0; j < vec.size() && j < MAX_VECTOR_SIZE; j++) {
             root.data_vectors[0][j] = vec[j];
@@ -111,7 +111,7 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
     }
     node.keys[i + 1] = key;
     
-    const std::vector<int>& vec = obj.get_vector();
+    const std::vector<float>& vec = obj.get_vector();
     node.vector_sizes[i + 1] = vec.size();
     for (size_t j = 0; j < vec.size() && j < MAX_VECTOR_SIZE; j++) {
         node.data_vectors[i + 1][j] = vec[j];
@@ -239,7 +239,7 @@ DataObject* DiskBPlusTree::search_data_object(const DataObject& obj) {
     for (int i = 0; i < node.keyCount; i++) {
         if (node.keys[i] == key) {
             // Reconstruct DataObject from fixed-size array
-            std::vector<int> vec(node.vector_sizes[i]);
+            std::vector<float> vec(node.vector_sizes[i]);
             for (int j = 0; j < node.vector_sizes[i] && j < MAX_VECTOR_SIZE; j++) {
                 vec[j] = node.data_vectors[i][j];
             }
@@ -270,7 +270,7 @@ DataObject* DiskBPlusTree::search_data_object(int key) {
     for (int i = 0; i < node.keyCount; i++) {
         if (node.keys[i] == key) {
             // Reconstruct DataObject from fixed-size array
-            std::vector<int> vec(node.vector_sizes[i]);
+            std::vector<float> vec(node.vector_sizes[i]);
             for (int j = 0; j < node.vector_sizes[i] && j < MAX_VECTOR_SIZE; j++) {
                 vec[j] = node.data_vectors[i][j];
             }
@@ -289,7 +289,6 @@ DataObject* DiskBPlusTree::search_data_object(float key) {
 std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key) {
     std::vector<DataObject*> results;
     
-    
     uint32_t pid = pm.getRoot();
     if (pid == INVALID_PAGE) {
         return results;
@@ -297,21 +296,12 @@ std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key) {
     
     // Find leaf node that contains min_key
     BPlusNode node;
-    int traversal_count = 0;
-    const int MAX_TRAVERSAL = 100;
     
     while (true) {
-        traversal_count++;
-        if (traversal_count > MAX_TRAVERSAL) {
-            std::cout << "ERROR: Infinite loop in range search traversal!" << std::endl;
-            return results;
-        }
-        
         read(pid, node);
         
         int i = 0;
         while (i < node.keyCount && min_key > node.keys[i]) i++;
-        
         
         if (node.isLeaf) {
             break;
@@ -321,19 +311,14 @@ std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key) {
     
     // Collect data from this leaf and subsequent leaves until max_key is reached
     uint32_t currentPid = pid;
-    uint32_t visitedCount = 0;
-    const uint32_t MAX_LEAVES_TO_VISIT = 100000000; // Safety limit
     
-    
-    while (currentPid != INVALID_PAGE && visitedCount < MAX_LEAVES_TO_VISIT) {
-        visitedCount++;
-        
+    while (currentPid != INVALID_PAGE) {
         BPlusNode leaf;
         read(currentPid, leaf);
                 
         for (int i = 0; i < leaf.keyCount; i++) {
             if (leaf.keys[i] >= min_key && leaf.keys[i] <= max_key) {
-                std::vector<int> vec(leaf.vector_sizes[i]);
+                std::vector<float> vec(leaf.vector_sizes[i]);
                 for (int j = 0; j < leaf.vector_sizes[i] && j < MAX_VECTOR_SIZE; j++) {
                     vec[j] = leaf.data_vectors[i][j];
                 }
@@ -348,18 +333,10 @@ std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key) {
         uint32_t nextPid = leaf.next;
         
         if (nextPid == currentPid) {
-            std::cout << "ERROR: Circular reference detected in leaf linking!" << std::endl;
-            break;
-        }
-        if (nextPid == INVALID_PAGE) {
-            break;
+            break;  // Circular reference protection
         }
         
         currentPid = nextPid; // Move to next leaf
-    }
-    
-    if (visitedCount >= MAX_LEAVES_TO_VISIT) {
-        std::cout << "ERROR: Visited too many leaves (" << visitedCount << "), possible infinite loop!" << std::endl;
     }
     
     return results;

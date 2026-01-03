@@ -4,13 +4,16 @@
 
 class DataObject {
 private:
-    std::vector<int> data_vector;
+    std::vector<float> data_vector;  // Changed to float for SIFT vectors
     std::variant<int, float> numeric_value;
 
 public:
     // Constructors
-    DataObject(const std::vector<int>& vector, int value);
-    DataObject(const std::vector<int>& vector, float value);
+    DataObject(const std::vector<float>& vector, int value);
+    DataObject(const std::vector<float>& vector, float value);
+    DataObject(const std::vector<int>& vector, int value);  // Legacy support
+    DataObject(const std::vector<int>& vector, float value);  // Legacy support
+    DataObject(int vector_size, int value);  // Size-based constructor
     DataObject(const DataObject& other);
 
     // Assignment operator
@@ -20,8 +23,8 @@ public:
     ~DataObject();
 
     // Getters
-    const std::vector<int>& get_vector() const;
-    std::vector<int>& get_vector();
+    const std::vector<float>& get_vector() const;
+    std::vector<float>& get_vector();
     
     int get_int_value() const;
     float get_float_value() const;
@@ -33,8 +36,8 @@ public:
     void set_float_value(float value);
 
     // Vector operations
-    void set_vector_element(size_t index, int value);
-    int get_vector_element(size_t index) const;
+    void set_vector_element(size_t index, float value);
+    float get_vector_element(size_t index) const;
     size_t get_vector_size() const;
 
     // Utility functions
@@ -53,10 +56,24 @@ public:
 // Template function implementations (after class definition)
 template<size_t N>
 DataObject createDataObject(const int (&array)[N], int value) {
-    return DataObject(std::vector<int>(array, array + N), value);
+    std::vector<float> vec(N);
+    for (size_t i = 0; i < N; i++) vec[i] = static_cast<float>(array[i]);
+    return DataObject(vec, value);
 }
 
 template<size_t N>
 DataObject createDataObject(const int (&array)[N], float value) {
-    return DataObject(std::vector<int>(array, array + N), value);
+    std::vector<float> vec(N);
+    for (size_t i = 0; i < N; i++) vec[i] = static_cast<float>(array[i]);
+    return DataObject(vec, value);
+}
+
+template<size_t N>
+DataObject createDataObject(const float (&array)[N], int value) {
+    return DataObject(std::vector<float>(array, array + N), value);
+}
+
+template<size_t N>
+DataObject createDataObject(const float (&array)[N], float value) {
+    return DataObject(std::vector<float>(array, array + N), value);
 }

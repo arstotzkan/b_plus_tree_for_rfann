@@ -2,14 +2,37 @@
 #include <iostream>
 #include <stdexcept>
 
-// Constructor with vector and int value
-DataObject::DataObject(const std::vector<int>& vector, int value)
+// Constructor with float vector and int value
+DataObject::DataObject(const std::vector<float>& vector, int value)
     : data_vector(vector), numeric_value(value) {
 }
 
-// Constructor with vector and float value
-DataObject::DataObject(const std::vector<int>& vector, float value)
+// Constructor with float vector and float value
+DataObject::DataObject(const std::vector<float>& vector, float value)
     : data_vector(vector), numeric_value(value) {
+}
+
+// Constructor with int vector and int value (legacy support)
+DataObject::DataObject(const std::vector<int>& vector, int value)
+    : numeric_value(value) {
+    data_vector.resize(vector.size());
+    for (size_t i = 0; i < vector.size(); i++) {
+        data_vector[i] = static_cast<float>(vector[i]);
+    }
+}
+
+// Constructor with int vector and float value (legacy support)
+DataObject::DataObject(const std::vector<int>& vector, float value)
+    : numeric_value(value) {
+    data_vector.resize(vector.size());
+    for (size_t i = 0; i < vector.size(); i++) {
+        data_vector[i] = static_cast<float>(vector[i]);
+    }
+}
+
+// Size-based constructor
+DataObject::DataObject(int vector_size, int value)
+    : data_vector(vector_size, 0.0f), numeric_value(value) {
 }
 
 // Copy constructor
@@ -31,11 +54,11 @@ DataObject::~DataObject() {
 }
 
 // Getters
-const std::vector<int>& DataObject::get_vector() const {
+const std::vector<float>& DataObject::get_vector() const {
     return data_vector;
 }
 
-std::vector<int>& DataObject::get_vector() {
+std::vector<float>& DataObject::get_vector() {
     return data_vector;
 }
 
@@ -53,7 +76,7 @@ bool DataObject::is_int_value() const {
 
 // Setters
 void DataObject::set_vector_size(size_t new_size) {
-    data_vector.resize(new_size, 0);
+    data_vector.resize(new_size, 0.0f);
 }
 
 void DataObject::set_int_value(int value) {
@@ -65,14 +88,14 @@ void DataObject::set_float_value(float value) {
 }
 
 // Vector operations
-void DataObject::set_vector_element(size_t index, int value) {
+void DataObject::set_vector_element(size_t index, float value) {
     if (index >= data_vector.size()) {
         throw std::out_of_range("Index out of range");
     }
     data_vector[index] = value;
 }
 
-int DataObject::get_vector_element(size_t index) const {
+float DataObject::get_vector_element(size_t index) const {
     if (index >= data_vector.size()) {
         throw std::out_of_range("Index out of range");
     }
@@ -86,9 +109,13 @@ size_t DataObject::get_vector_size() const {
 // Utility functions
 void DataObject::print() const {
     std::cout << "[";
-    for (size_t i = 0; i < data_vector.size(); i++) {
+    size_t print_size = std::min(data_vector.size(), static_cast<size_t>(5));
+    for (size_t i = 0; i < print_size; i++) {
         std::cout << data_vector[i];
-        if (i < data_vector.size() - 1) std::cout << ", ";
+        if (i < print_size - 1) std::cout << ", ";
+    }
+    if (data_vector.size() > 5) {
+        std::cout << ", ... (" << data_vector.size() << " dims)";
     }
     std::cout << "]";
     

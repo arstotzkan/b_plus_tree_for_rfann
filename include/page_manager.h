@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <fstream>
 #include <string>
+#include "node.h"
 
 class PageManager {
 public:
@@ -24,5 +25,4 @@ public:
 
 private:
     std::fstream file;
-    static constexpr size_t PAGE_SIZE = 4096;
 };

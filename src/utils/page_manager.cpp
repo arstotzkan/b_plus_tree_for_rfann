@@ -1,15 +1,14 @@
 #include "page_manager.h"
+#include "node.h"
 #include <cstdint>
 #include <fstream>
 #include <string>
+#include <vector>
 
 struct FileHeader {
     uint32_t rootPage;
     uint32_t nextFreePage;
 };
-
-static constexpr uint32_t INVALID_PAGE = 0xFFFFFFFF;
-static constexpr size_t PAGE_SIZE = 4096;
 
 PageManager::PageManager(const std::string& filename) {
     file.open(filename,
@@ -23,8 +22,8 @@ PageManager::PageManager(const std::string& filename) {
         file.write(reinterpret_cast<char*>(&header), sizeof(header));
 
         // Pad header page
-        char zero[PAGE_SIZE - sizeof(header)]{};
-        file.write(zero, sizeof(zero));
+        std::vector<char> zero(PAGE_SIZE - sizeof(header), 0);
+        file.write(zero.data(), zero.size());
         file.close();
 
         // Reopen in read/write mode

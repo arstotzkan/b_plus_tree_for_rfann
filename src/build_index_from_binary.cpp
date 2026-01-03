@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <chrono>
 
 void print_usage(const char* program_name) {
     std::cout << "Usage: " << program_name << " --input <binary_file> --index <index_path>" << std::endl;
@@ -73,6 +74,9 @@ int main(int argc, char* argv[]) {
     std::cout << "Dimension: " << dimension << std::endl;
     std::cout << std::endl;
 
+    // Start timing
+    auto start_time = std::chrono::high_resolution_clock::now();
+
     DiskBPlusTree dataTree(index_path);
 
     // Read and insert each data point
@@ -86,16 +90,10 @@ int main(int argc, char* argv[]) {
             break;
         }
 
-        // Convert float vector to int vector for DataObject
-        std::vector<int> int_vector(dimension);
-        for (int j = 0; j < dimension; j++) {
-            int_vector[j] = static_cast<int>(point_data[j]);
-        }
-
         // Use the first element as the key (since data is sorted by attribute)
         int key = static_cast<int>(point_data[0]);
 
-        DataObject obj(int_vector, key);
+        DataObject obj(point_data, key);
 
         try {
             dataTree.insert_data_object(obj);
@@ -114,7 +112,13 @@ int main(int argc, char* argv[]) {
 
     file.close();
 
+    // End timing
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
     std::cout << std::endl << "=== Index Build Complete ===" << std::endl;
+    std::cout << "Total points inserted: " << num_points << std::endl;
+    std::cout << "Build time: " << duration.count() << " ms (" << (duration.count() / 1000.0) << " seconds)" << std::endl;
 
     return 0;
 }

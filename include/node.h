@@ -1,10 +1,24 @@
 #pragma once
 #include <cstdint>
 #include "DataObject.h"
-constexpr size_t PAGE_SIZE = 4096;
+
+// Default values - can be overridden at compile time with -D flags
+#ifndef BPTREE_PAGE_SIZE
+#define BPTREE_PAGE_SIZE 8192
+#endif
+
+#ifndef BPTREE_ORDER
+#define BPTREE_ORDER 4
+#endif
+
+#ifndef BPTREE_MAX_VECTOR_SIZE
+#define BPTREE_MAX_VECTOR_SIZE 128
+#endif
+
+constexpr size_t PAGE_SIZE = BPTREE_PAGE_SIZE;
 constexpr uint32_t INVALID_PAGE = 0xFFFFFFFF;
-constexpr int ORDER = 8; // Further reduced to prevent overflow
-constexpr int MAX_VECTOR_SIZE = 5; // Reduced to fit comfortably in page
+constexpr int ORDER = BPTREE_ORDER;
+constexpr int MAX_VECTOR_SIZE = BPTREE_MAX_VECTOR_SIZE;
 
 // BPlusNode for DataObject storage only
 struct BPlusNode {
@@ -16,5 +30,5 @@ struct BPlusNode {
     
     // For DataObject storage in leaf nodes - use fixed-size arrays
     int vector_sizes[ORDER]; // Store the size of each vector
-    int data_vectors[ORDER][MAX_VECTOR_SIZE]; // Fixed-size storage for vectors
+    float data_vectors[ORDER][MAX_VECTOR_SIZE]; // Float storage for vectors
 };
