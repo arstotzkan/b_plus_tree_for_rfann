@@ -1,5 +1,7 @@
 #include "bplustree_disk.h"
 #include "DataObject.h"
+#include "index_directory.h"
+#include "query_cache.h"
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -89,35 +91,37 @@ double calculate_recall(const std::vector<int>& retrieved, const std::vector<int
 }
 
 void print_usage(const char* program_name) {
-    std::cout << "Usage: " << program_name << " --index <path> [options]" << std::endl;
+    std::cout << "Usage: " << program_name << " --index <index_dir> [options]" << std::endl;
     std::cout << std::endl;
     std::cout << "Flags:" << std::endl;
-    std::cout << "  --index, -i      Path to the B+ tree index file (required)" << std::endl;
+    std::cout << "  --index, -i      Path to the index directory (required)" << std::endl;
     std::cout << "  --queries, -q    Path to query vectors file (.fvecs format)" << std::endl;
     std::cout << "  --groundtruth    Path to groundtruth file (.ivecs format)" << std::endl;
     std::cout << "  --num-queries    Number of queries to run (default: all)" << std::endl;
+    std::cout << "  --no-cache       Disable query caching" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  Batch RFANN test:" << std::endl;
-    std::cout << "    " << program_name << " --index data/sift_index.bpt --queries data/dataset/siftsmall_query.fvecs \\" << std::endl;
+    std::cout << "    " << program_name << " --index data/sift_index --queries data/dataset/siftsmall_query.fvecs \\" << std::endl;
     std::cout << "      --groundtruth data/dataset/siftsmall_groundtruth.ivecs" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
-    std::string index_path;
+    std::string index_dir;
     std::string queries_path;
     std::string groundtruth_path;
     int num_queries = -1;
     bool has_index = false;
     bool has_queries = false;
     bool has_groundtruth = false;
+    bool cache_enabled = true;
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         
         if ((arg == "--index" || arg == "-i") && i + 1 < argc) {
-            index_path = argv[++i];
+            index_dir = argv[++i];
             has_index = true;
         } else if ((arg == "--queries" || arg == "-q") && i + 1 < argc) {
             queries_path = argv[++i];
@@ -127,6 +131,8 @@ int main(int argc, char* argv[]) {
             has_groundtruth = true;
         } else if (arg == "--num-queries" && i + 1 < argc) {
             num_queries = std::atoi(argv[++i]);
+        } else if (arg == "--no-cache") {
+            cache_enabled = false;
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -139,10 +145,23 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "=== RFANN B+ Tree Benchmark ===" << std::endl;
-    std::cout << "Index path: " << index_path << std::endl;
+    IndexDirectory idx_dir(index_dir);
+    if (!idx_dir.index_exists()) {
+        std::cerr << "Error: Index file not found: " << idx_dir.get_index_file_path() << std::endl;
+        return 1;
+    }
 
-    DiskBPlusTree dataTree(index_path);
+    std::cout << "=== RFANN B+ Tree Benchmark ===" << std::endl;
+    std::cout << "Index directory: " << index_dir << std::endl;
+    std::cout << "Index file: " << idx_dir.get_index_file_path() << std::endl;
+    std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
+
+    DiskBPlusTree dataTree(idx_dir.get_index_file_path());
+    QueryCache cache(idx_dir.get_base_dir(), cache_enabled);
+    
+    if (cache_enabled) {
+        cache.load_config(idx_dir.get_config_file_path());
+    }
 
     auto [min_key, max_key] = dataTree.get_key_range();
     if (max_key < min_key) {
@@ -219,52 +238,80 @@ int main(int argc, char* argv[]) {
     long long total_range_time = 0;
     long long total_knn_time = 0;
     int valid_queries = 0;
+    int cache_hits = 0;
 
     for (int q = 0; q < queries_to_run; q++) {
         const std::vector<float>& query_vec = queries[q];
-
-        // Range search
-        auto range_start = std::chrono::high_resolution_clock::now();
-        std::vector<DataObject*> range_results = dataTree.search_range(min_key, max_key);
-        auto range_end = std::chrono::high_resolution_clock::now();
-        total_range_time += std::chrono::duration_cast<std::chrono::microseconds>(range_end - range_start).count();
-
-        if (range_results.empty()) {
-            continue;
-        }
-
-        // KNN within range
-        auto knn_start = std::chrono::high_resolution_clock::now();
-        std::vector<std::pair<double, int>> distances;
-        for (DataObject* obj : range_results) {
-            double dist = calculate_distance(query_vec, obj->get_vector());
-            int key = obj->is_int_value() ? obj->get_int_value() : static_cast<int>(obj->get_float_value());
-            distances.push_back({dist, key});
-        }
-
-        std::sort(distances.begin(), distances.end(),
-            [](const auto& a, const auto& b) { return a.first < b.first; });
-
-        // Get top-K
         std::vector<int> retrieved;
-        if (has_groundtruth) {
-            for (int i = 0; i < std::min(k_neighbors, static_cast<int>(distances.size())); i++) {
-                retrieved.push_back(distances[i].second);
+        
+        std::string query_hash = cache.compute_query_hash(query_vec, min_key, max_key, k_neighbors);
+        
+        if (cache_enabled && cache.has_cached_result(query_hash)) {
+            auto cache_start = std::chrono::high_resolution_clock::now();
+            CachedQueryResult cached = cache.get_cached_result(query_hash);
+            auto cache_end = std::chrono::high_resolution_clock::now();
+            total_range_time += std::chrono::duration_cast<std::chrono::microseconds>(cache_end - cache_start).count();
+            
+            for (const auto& obj : cached.output_objects) {
+                retrieved.push_back(obj.second);
+            }
+            cache_hits++;
+        } else {
+            // Range search
+            auto range_start = std::chrono::high_resolution_clock::now();
+            std::vector<DataObject*> range_results = dataTree.search_range(min_key, max_key);
+            auto range_end = std::chrono::high_resolution_clock::now();
+            total_range_time += std::chrono::duration_cast<std::chrono::microseconds>(range_end - range_start).count();
+
+            if (range_results.empty()) {
+                continue;
+            }
+
+            // KNN within range
+            auto knn_start = std::chrono::high_resolution_clock::now();
+            std::vector<std::pair<double, int>> distances;
+            for (DataObject* obj : range_results) {
+                double dist = calculate_distance(query_vec, obj->get_vector());
+                int key = obj->is_int_value() ? obj->get_int_value() : static_cast<int>(obj->get_float_value());
+                distances.push_back({dist, key});
+            }
+
+            std::sort(distances.begin(), distances.end(),
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+
+            // Get top-K and prepare cache data
+            std::vector<std::pair<std::vector<float>, int>> results_for_cache;
+            if (has_groundtruth) {
+                for (int i = 0; i < std::min(k_neighbors, static_cast<int>(distances.size())); i++) {
+                    retrieved.push_back(distances[i].second);
+                    for (DataObject* obj : range_results) {
+                        int obj_key = obj->is_int_value() ? obj->get_int_value() : static_cast<int>(obj->get_float_value());
+                        if (obj_key == distances[i].second) {
+                            results_for_cache.push_back({obj->get_vector(), obj_key});
+                            break;
+                        }
+                    }
+                }
+            }
+            auto knn_end = std::chrono::high_resolution_clock::now();
+            total_knn_time += std::chrono::duration_cast<std::chrono::microseconds>(knn_end - knn_start).count();
+
+            // Store in cache
+            if (cache_enabled && has_groundtruth && !results_for_cache.empty()) {
+                cache.store_result(query_hash, query_vec, min_key, max_key, k_neighbors, results_for_cache);
+            }
+
+            // Clean up
+            for (DataObject* obj : range_results) {
+                delete obj;
             }
         }
-        auto knn_end = std::chrono::high_resolution_clock::now();
-        total_knn_time += std::chrono::duration_cast<std::chrono::microseconds>(knn_end - knn_start).count();
 
         // Calculate recall if groundtruth available
         if (has_groundtruth && q < static_cast<int>(groundtruth.size())) {
             double recall = calculate_recall(retrieved, groundtruth[q], k_neighbors);
             total_recall += recall;
             valid_queries++;
-        }
-
-        // Clean up
-        for (DataObject* obj : range_results) {
-            delete obj;
         }
 
         // Progress
@@ -277,6 +324,9 @@ int main(int argc, char* argv[]) {
     // Print results
     std::cout << std::endl << "=== Benchmark Results ===" << std::endl;
     std::cout << "Total queries: " << queries_to_run << std::endl;
+    if (cache_enabled) {
+        std::cout << "Cache hits: " << cache_hits << " (" << (cache_hits * 100.0 / queries_to_run) << "%)" << std::endl;
+    }
     std::cout << "Average range search time: " << (total_range_time / queries_to_run) << " us" << std::endl;
     std::cout << "Average KNN time: " << (total_knn_time / queries_to_run) << " us" << std::endl;
     std::cout << "Average total query time: " << ((total_range_time + total_knn_time) / queries_to_run) << " us" << std::endl;

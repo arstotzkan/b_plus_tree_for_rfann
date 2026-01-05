@@ -1,5 +1,6 @@
 #include "bplustree_disk.h"
 #include "DataObject.h"
+#include "index_directory.h"
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -8,10 +9,11 @@
 #include <chrono>
 
 void print_usage(const char* program_name) {
-    std::cout << "Usage: " << program_name << " --input <binary_file> --index <index_path>" << std::endl;
+    std::cout << "Usage: " << program_name << " --input <binary_file> --index <index_dir> [options]" << std::endl;
     std::cout << "Flags:" << std::endl;
     std::cout << "  --input, -i   Path to the input binary file" << std::endl;
-    std::cout << "  --index, -o   Path to the output B+ tree index file" << std::endl;
+    std::cout << "  --index, -o   Path to the index directory (will contain index.bpt and .cache/)" << std::endl;
+    std::cout << "  --no-cache    Disable cache creation" << std::endl;
     std::cout << std::endl;
     std::cout << "Binary file format:" << std::endl;
     std::cout << "  - First 4 bytes: number of points (int32)" << std::endl;
@@ -19,14 +21,15 @@ void print_usage(const char* program_name) {
     std::cout << "  - Following n*d*sizeof(float) bytes: data points (float[])" << std::endl;
     std::cout << "  - Data points should be sorted in ascending order by attribute" << std::endl;
     std::cout << std::endl;
-    std::cout << "Example: " << program_name << " --input data/vectors.bin --index data/my_index.bpt" << std::endl;
+    std::cout << "Example: " << program_name << " --input data/vectors.bin --index data/my_index" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
     std::string input_path;
-    std::string index_path;
+    std::string index_dir;
     bool has_input = false;
     bool has_index = false;
+    bool cache_enabled = true;
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
@@ -36,8 +39,10 @@ int main(int argc, char* argv[]) {
             input_path = argv[++i];
             has_input = true;
         } else if ((arg == "--index" || arg == "-o") && i + 1 < argc) {
-            index_path = argv[++i];
+            index_dir = argv[++i];
             has_index = true;
+        } else if (arg == "--no-cache") {
+            cache_enabled = false;
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -47,6 +52,13 @@ int main(int argc, char* argv[]) {
     if (!has_input || !has_index) {
         std::cerr << "Error: Missing required flags" << std::endl;
         print_usage(argv[0]);
+        return 1;
+    }
+
+    // Setup index directory
+    IndexDirectory idx_dir(index_dir);
+    if (!idx_dir.ensure_exists()) {
+        std::cerr << "Error: Cannot create index directory: " << index_dir << std::endl;
         return 1;
     }
 
@@ -69,7 +81,9 @@ int main(int argc, char* argv[]) {
 
     std::cout << "=== Building B+ Tree Index from Binary File ===" << std::endl;
     std::cout << "Input file: " << input_path << std::endl;
-    std::cout << "Index path: " << index_path << std::endl;
+    std::cout << "Index directory: " << index_dir << std::endl;
+    std::cout << "Index file: " << idx_dir.get_index_file_path() << std::endl;
+    std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
     std::cout << "Number of points: " << num_points << std::endl;
     std::cout << "Dimension: " << dimension << std::endl;
     std::cout << std::endl;
@@ -77,7 +91,7 @@ int main(int argc, char* argv[]) {
     // Start timing
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    DiskBPlusTree dataTree(index_path);
+    DiskBPlusTree dataTree(idx_dir.get_index_file_path());
 
     // Read and insert each data point
     std::vector<float> point_data(dimension);

@@ -1,5 +1,6 @@
 #include "bplustree_disk.h"
 #include "DataObject.h"
+#include "index_directory.h"
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -8,25 +9,27 @@
 #include <chrono>
 
 void print_usage(const char* program_name) {
-    std::cout << "Usage: " << program_name << " --input <fvecs_file> --index <index_path> [--batch-size <size>]" << std::endl;
+    std::cout << "Usage: " << program_name << " --input <fvecs_file> --index <index_dir> [options]" << std::endl;
     std::cout << std::endl;
     std::cout << "Flags:" << std::endl;
     std::cout << "  --input, -i     Path to the input .fvecs file" << std::endl;
-    std::cout << "  --index, -o     Path to the output B+ tree index file" << std::endl;
+    std::cout << "  --index, -o     Path to the index directory (will contain index.bpt and .cache/)" << std::endl;
     std::cout << "  --batch-size    Number of vectors to process in each batch (default: 100)" << std::endl;
+    std::cout << "  --no-cache      Disable cache creation" << std::endl;
     std::cout << std::endl;
     std::cout << "FVECS file format:" << std::endl;
     std::cout << "  Each vector: 4 bytes (dimension d as int32) + d*4 bytes (floats)" << std::endl;
     std::cout << std::endl;
-    std::cout << "Example: " << program_name << " --input data/siftsmall_base.fvecs --index data/sift_index.bpt --batch-size 50" << std::endl;
+    std::cout << "Example: " << program_name << " --input data/siftsmall_base.fvecs --index data/sift_index" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
     std::string input_path;
-    std::string index_path;
+    std::string index_dir;
     int batch_size = 10;  // Reduced default batch size for memory efficiency
     bool has_input = false;
     bool has_index = false;
+    bool cache_enabled = true;
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
@@ -36,11 +39,13 @@ int main(int argc, char* argv[]) {
             input_path = argv[++i];
             has_input = true;
         } else if ((arg == "--index" || arg == "-o") && i + 1 < argc) {
-            index_path = argv[++i];
+            index_dir = argv[++i];
             has_index = true;
         } else if (arg == "--batch-size" && i + 1 < argc) {
             batch_size = std::atoi(argv[++i]);
             if (batch_size <= 0) batch_size = 100;
+        } else if (arg == "--no-cache") {
+            cache_enabled = false;
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -53,6 +58,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Setup index directory
+    IndexDirectory idx_dir(index_dir);
+    if (!idx_dir.ensure_exists()) {
+        std::cerr << "Error: Cannot create index directory: " << index_dir << std::endl;
+        return 1;
+    }
+
     // Open fvecs file
     std::ifstream file(input_path, std::ios::binary);
     if (!file.is_open()) {
@@ -62,14 +74,16 @@ int main(int argc, char* argv[]) {
 
     std::cout << "=== Building B+ Tree Index from FVECS File ===" << std::endl;
     std::cout << "Input file: " << input_path << std::endl;
-    std::cout << "Index path: " << index_path << std::endl;
+    std::cout << "Index directory: " << index_dir << std::endl;
+    std::cout << "Index file: " << idx_dir.get_index_file_path() << std::endl;
+    std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
     std::cout << "Batch size: " << batch_size << " vectors" << std::endl;
     std::cout << std::endl;
 
     // Start timing
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    DiskBPlusTree dataTree(index_path);
+    DiskBPlusTree dataTree(idx_dir.get_index_file_path());
 
     int32_t dimension = -1;
     int vector_count = 0;

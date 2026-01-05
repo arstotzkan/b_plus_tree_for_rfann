@@ -31,6 +31,8 @@ set(COMMON_SOURCES
     utils/page_manager.cpp
     utils/bplustree_disk.cpp
     utils/DataObject.cpp
+    utils/query_cache.cpp
+    utils/index_directory.cpp
 )
 
 # Build index with synthetic data executable

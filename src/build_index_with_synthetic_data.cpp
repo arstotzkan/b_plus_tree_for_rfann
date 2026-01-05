@@ -1,5 +1,6 @@
 #include "bplustree_disk.h"
 #include "DataObject.h"
+#include "index_directory.h"
 #include <iostream>
 #include <random>
 #include <ctime>
@@ -8,30 +9,34 @@
 #include <chrono>
 
 void print_usage(const char* program_name) {
-    std::cout << "Usage: " << program_name << " --index <path> --size <count>" << std::endl;
+    std::cout << "Usage: " << program_name << " --index <index_dir> --size <count> [options]" << std::endl;
     std::cout << "Flags:" << std::endl;
-    std::cout << "  --index, -i  Path to the B+ tree index file to create" << std::endl;
+    std::cout << "  --index, -i  Path to the index directory (will contain index.bpt and .cache/)" << std::endl;
     std::cout << "  --size, -s   Number of synthetic DataObjects to generate and insert" << std::endl;
+    std::cout << "  --no-cache   Disable cache creation" << std::endl;
     std::cout << std::endl;
-    std::cout << "Example: " << program_name << " --index data/my_index.bpt --size 1000" << std::endl;
+    std::cout << "Example: " << program_name << " --index data/my_index --size 1000" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
-    std::string index_path;
+    std::string index_dir;
     int data_size = 0;
     bool has_index = false;
     bool has_size = false;
+    bool cache_enabled = true;
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         
         if ((arg == "--index" || arg == "-i") && i + 1 < argc) {
-            index_path = argv[++i];
+            index_dir = argv[++i];
             has_index = true;
         } else if ((arg == "--size" || arg == "-s") && i + 1 < argc) {
             data_size = std::atoi(argv[++i]);
             has_size = true;
+        } else if (arg == "--no-cache") {
+            cache_enabled = false;
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -49,20 +54,29 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Setup index directory
+    IndexDirectory idx_dir(index_dir);
+    if (!idx_dir.ensure_exists()) {
+        std::cerr << "Error: Cannot create index directory: " << index_dir << std::endl;
+        return 1;
+    }
+
     // Initialize random number generator
     std::mt19937 rng(static_cast<unsigned int>(time(nullptr)));
     std::uniform_int_distribution<int> vector_dist(0, 100);
     std::uniform_int_distribution<int> value_dist(0, 150);
 
     std::cout << "=== Building B+ Tree Index with Synthetic Data ===" << std::endl;
-    std::cout << "Index path: " << index_path << std::endl;
+    std::cout << "Index directory: " << index_dir << std::endl;
+    std::cout << "Index file: " << idx_dir.get_index_file_path() << std::endl;
+    std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
     std::cout << "Data size: " << data_size << std::endl;
     std::cout << std::endl;
 
     // Start timing
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    DiskBPlusTree dataTree(index_path);
+    DiskBPlusTree dataTree(idx_dir.get_index_file_path());
 
     // Create and insert DataObjects with random values
     for (int i = 1; i <= data_size; i++) {

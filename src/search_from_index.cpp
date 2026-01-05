@@ -1,5 +1,7 @@
 #include "bplustree_disk.h"
 #include "DataObject.h"
+#include "index_directory.h"
+#include "query_cache.h"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -32,28 +34,29 @@ std::vector<float> parse_vector(const std::string& str) {
 }
 
 void print_usage(const char* program_name) {
-    std::cout << "Usage: " << program_name << " --index <path> [--min <value> --max <value> | --value <value>] [--vector <v1,v2,...>] [--K <count>]" << std::endl;
+    std::cout << "Usage: " << program_name << " --index <index_dir> [--min <value> --max <value> | --value <value>] [--vector <v1,v2,...>] [--K <count>]" << std::endl;
     std::cout << std::endl;
     std::cout << "Flags:" << std::endl;
-    std::cout << "  --index, -i   Path to the B+ tree index file (required)" << std::endl;
+    std::cout << "  --index, -i   Path to the index directory (required)" << std::endl;
     std::cout << "  --min         Minimum value for range search" << std::endl;
     std::cout << "  --max         Maximum value for range search" << std::endl;
     std::cout << "  --value, -v   Search for all objects with a specific value" << std::endl;
     std::cout << "  --vector      Query vector for KNN search (comma-separated, e.g., 1,2,3)" << std::endl;
     std::cout << "  --K, -k       Number of nearest neighbors to return (requires --vector)" << std::endl;
     std::cout << "  --limit       Maximum number of results to return (for memory efficiency)" << std::endl;
+    std::cout << "  --no-cache    Disable query caching" << std::endl;
     std::cout << std::endl;
     std::cout << "Note: --value and --min/--max are mutually exclusive" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
-    std::cout << "  Range search:      " << program_name << " --index data/my_index.bpt --min 20 --max 80" << std::endl;
-    std::cout << "  Value search:      " << program_name << " --index data/my_index.bpt --value 42" << std::endl;
-    std::cout << "  KNN in range:      " << program_name << " --index data/my_index.bpt --min 20 --max 80 --vector 10,20,30 --K 5" << std::endl;
-    std::cout << "  KNN at value:      " << program_name << " --index data/my_index.bpt --value 42 --vector 10,20,30 --K 5" << std::endl;
+    std::cout << "  Range search:      " << program_name << " --index data/my_index --min 20 --max 80" << std::endl;
+    std::cout << "  Value search:      " << program_name << " --index data/my_index --value 42" << std::endl;
+    std::cout << "  KNN in range:      " << program_name << " --index data/my_index --min 20 --max 80 --vector 10,20,30 --K 5" << std::endl;
+    std::cout << "  KNN at value:      " << program_name << " --index data/my_index --value 42 --vector 10,20,30 --K 5" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
-    std::string index_path;
+    std::string index_dir;
     int min_key = -1;
     int max_key = -1;
     int search_value = -1;
@@ -66,13 +69,14 @@ int main(int argc, char* argv[]) {
     bool has_value = false;
     bool has_vector = false;
     bool has_k = false;
+    bool cache_enabled = true;
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         
         if ((arg == "--index" || arg == "-i") && i + 1 < argc) {
-            index_path = argv[++i];
+            index_dir = argv[++i];
             has_index = true;
         } else if (arg == "--min" && i + 1 < argc) {
             min_key = std::atoi(argv[++i]);
@@ -91,6 +95,8 @@ int main(int argc, char* argv[]) {
             has_k = true;
         } else if (arg == "--limit" && i + 1 < argc) {
             result_limit = std::atoi(argv[++i]);
+        } else if (arg == "--no-cache") {
+            cache_enabled = false;
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -133,7 +139,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    DiskBPlusTree dataTree(index_path);
+    IndexDirectory idx_dir(index_dir);
+    if (!idx_dir.index_exists()) {
+        std::cerr << "Error: Index file not found: " << idx_dir.get_index_file_path() << std::endl;
+        return 1;
+    }
+
+    DiskBPlusTree dataTree(idx_dir.get_index_file_path());
+    QueryCache cache(idx_dir.get_base_dir(), cache_enabled);
+    
+    if (cache_enabled) {
+        cache.load_config(idx_dir.get_config_file_path());
+    }
 
     // Start timing
     auto query_start = std::chrono::high_resolution_clock::now();
@@ -144,13 +161,15 @@ int main(int argc, char* argv[]) {
     if (has_value) {
         // Value search - get all objects with this value using range search with same min/max
         std::cout << "=== B+ Tree Value Search ===" << std::endl;
-        std::cout << "Index path: " << index_path << std::endl;
+        std::cout << "Index directory: " << index_dir << std::endl;
+        std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
         std::cout << "Search value: " << search_value << std::endl;
         results = dataTree.search_range(search_value, search_value);
     } else {
         // Range search
         std::cout << "=== B+ Tree Range Search ===" << std::endl;
-        std::cout << "Index path: " << index_path << std::endl;
+        std::cout << "Index directory: " << index_dir << std::endl;
+        std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
         std::cout << "Range: [" << min_key << ", " << max_key << "]" << std::endl;
         results = dataTree.search_range(min_key, max_key);
     }
@@ -172,36 +191,79 @@ int main(int argc, char* argv[]) {
     std::cout << std::endl;
 
     if (has_vector && has_k) {
-        // KNN search: sort results by distance to query vector
-        std::vector<std::pair<double, DataObject*>> distances;
-        for (DataObject* obj : results) {
-            double dist = calculate_distance(query_vector, obj->get_vector());
-            distances.push_back({dist, obj});
-        }
-
-        // Sort by distance
-        std::sort(distances.begin(), distances.end(), 
-            [](const auto& a, const auto& b) { return a.first < b.first; });
-
-        // Output K nearest neighbors
-        int output_count = std::min(k_neighbors, static_cast<int>(distances.size()));
-        std::cout << "Found " << results.size() << " objects, showing " << output_count << " nearest neighbors:" << std::endl;
+        // Determine actual min/max for cache key
+        int cache_min = has_value ? search_value : min_key;
+        int cache_max = has_value ? search_value : max_key;
         
-        for (int i = 0; i < output_count; i++) {
-            std::cout << "  #" << (i+1) << " (dist=" << distances[i].first << "): ";
-            distances[i].second->print();
+        // Check cache first
+        std::string query_hash = cache.compute_query_hash(query_vector, cache_min, cache_max, k_neighbors);
+        bool cache_hit = false;
+        
+        if (cache_enabled && cache.has_cached_result(query_hash)) {
+            auto cache_start = std::chrono::high_resolution_clock::now();
+            CachedQueryResult cached = cache.get_cached_result(query_hash);
+            auto cache_end = std::chrono::high_resolution_clock::now();
+            auto cache_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_end - cache_start);
+            
+            std::cout << "Cache HIT! Retrieved " << cached.output_objects.size() << " cached results:" << std::endl;
+            for (size_t i = 0; i < cached.output_objects.size(); i++) {
+                double dist = calculate_distance(query_vector, cached.output_objects[i].first);
+                std::cout << "  #" << (i+1) << " (dist=" << dist << ", key=" << cached.output_objects[i].second << ")" << std::endl;
+            }
+            
+            std::cout << std::endl << "Query execution time (from cache): " << cache_duration.count() << " us" << std::endl;
+            
+            // Clean up results that were fetched but not needed
+            for (DataObject* obj : results) {
+                delete obj;
+            }
+            cache_hit = true;
         }
+        
+        if (!cache_hit) {
+            // KNN search: sort results by distance to query vector
+            std::vector<std::pair<double, DataObject*>> distances;
+            for (DataObject* obj : results) {
+                double dist = calculate_distance(query_vector, obj->get_vector());
+                distances.push_back({dist, obj});
+            }
 
-        // Clean up all results
-        for (auto& pair : distances) {
-            delete pair.second;
+            // Sort by distance
+            std::sort(distances.begin(), distances.end(), 
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+
+            // Output K nearest neighbors and prepare cache data
+            int output_count = std::min(k_neighbors, static_cast<int>(distances.size()));
+            std::cout << "Found " << results.size() << " objects, showing " << output_count << " nearest neighbors:" << std::endl;
+            
+            std::vector<std::pair<std::vector<float>, int>> results_for_cache;
+            for (int i = 0; i < output_count; i++) {
+                std::cout << "  #" << (i+1) << " (dist=" << distances[i].first << "): ";
+                distances[i].second->print();
+                
+                int obj_key = distances[i].second->is_int_value() ? 
+                    distances[i].second->get_int_value() : 
+                    static_cast<int>(distances[i].second->get_float_value());
+                results_for_cache.push_back({distances[i].second->get_vector(), obj_key});
+            }
+
+            // Store in cache
+            if (cache_enabled && !results_for_cache.empty()) {
+                cache.store_result(query_hash, query_vector, cache_min, cache_max, k_neighbors, results_for_cache);
+                std::cout << std::endl << "Results cached for future queries." << std::endl;
+            }
+
+            // Clean up all results
+            for (auto& pair : distances) {
+                delete pair.second;
+            }
+
+            auto knn_end = std::chrono::high_resolution_clock::now();
+            auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(knn_end - query_start);
+            std::cout << std::endl << "Query execution time:" << std::endl;
+            std::cout << "  Range search: " << range_duration.count() << " us" << std::endl;
+            std::cout << "  Total (with KNN): " << total_duration.count() << " us" << std::endl;
         }
-
-        auto knn_end = std::chrono::high_resolution_clock::now();
-        auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(knn_end - query_start);
-        std::cout << std::endl << "Query execution time:" << std::endl;
-        std::cout << "  Range search: " << range_duration.count() << " us" << std::endl;
-        std::cout << "  Total (with KNN): " << total_duration.count() << " us" << std::endl;
     } else {
         // Regular search output
         size_t display_count = results.size();
