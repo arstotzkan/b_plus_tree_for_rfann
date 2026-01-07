@@ -13,7 +13,7 @@
 void print_usage(const char* program_name) {
     std::cout << "Usage: " << program_name << " --index <index_dir> --size <count> [options]" << std::endl;
     std::cout << "Flags:" << std::endl;
-    std::cout << "  --index, -i     Path to the index directory (will contain index.bpt and .cache/)" << std::endl;
+    std::cout << "  --index, -o     Path to the index directory (will contain index.bpt and .cache/)" << std::endl;
     std::cout << "  --size, -s      Number of synthetic DataObjects to generate and insert" << std::endl;
     std::cout << "  --dimension, -d Vector dimension (default: 128)" << std::endl;
     std::cout << "  --order         B+ tree order (default: auto-calculated based on vector dimension)" << std::endl;
@@ -37,7 +37,7 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         
-        if ((arg == "--index" || arg == "-i") && i + 1 < argc) {
+        if ((arg == "--index" || arg == "-o") && i + 1 < argc) {
             index_dir = argv[++i];
             has_index = true;
         } else if ((arg == "--size" || arg == "-s") && i + 1 < argc) {
