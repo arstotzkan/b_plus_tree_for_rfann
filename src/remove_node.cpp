@@ -2,6 +2,7 @@
 #include "DataObject.h"
 #include "index_directory.h"
 #include "query_cache.h"
+#include "logger.h"
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -87,6 +88,10 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         
+        // Initialize logging
+        Logger::init(index_dir, "index");
+        Logger::set_log_level(LogLevel::INFO);
+        
         // Open B+ tree
         DiskBPlusTree dataTree(index_file);
         
@@ -110,6 +115,7 @@ int main(int argc, char* argv[]) {
         
         if (!found_obj) {
             std::cout << "Node with key " << key_str << " not found in the index." << std::endl;
+            Logger::log_node_operation("REMOVE", "Key not found: " + key_str);
             return 1;
         }
         
@@ -129,6 +135,11 @@ int main(int argc, char* argv[]) {
         // Store the vector of the object to be deleted (for cache update)
         std::vector<float> deleted_vector;
         int key_for_cache = is_float_key ? static_cast<int>(std::stof(key_str)) : std::stoi(key_str);
+        
+        // Log node removal start
+        std::ostringstream remove_log;
+        remove_log << "REMOVE | Key: " << key_str << " | Vector dimension: " << found_obj->get_vector().size();
+        Logger::log_node_operation("REMOVE", remove_log.str());
         
         // Perform deletion
         std::cout << std::endl;
@@ -156,12 +167,16 @@ int main(int argc, char* argv[]) {
         
         if (deleted) {
             std::cout << "Successfully deleted node with key " << key_str << std::endl;
+            Logger::log_node_operation("REMOVE", "Node deleted successfully: " + key_str);
             
             // Update affected cache entries by removing the deleted object
             int updated_caches = cache.update_for_deleted_object(key_for_cache, deleted_vector);
             
             if (updated_caches > 0) {
                 std::cout << "Updated " << updated_caches << " cached queries to remove deleted entry" << std::endl;
+                std::ostringstream cache_log;
+                cache_log << "REMOVE | Updated " << updated_caches << " cached queries";
+                Logger::log_node_operation("REMOVE", cache_log.str());
             }
             
             // Verify deletion

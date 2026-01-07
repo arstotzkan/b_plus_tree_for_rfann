@@ -2,6 +2,7 @@
 #include "DataObject.h"
 #include "index_directory.h"
 #include "query_cache.h"
+#include "logger.h"
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -93,6 +94,10 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         
+        // Initialize logging
+        Logger::init(index_dir, "index");
+        Logger::set_log_level(LogLevel::INFO);
+        
         // Open B+ tree
         DiskBPlusTree dataTree(index_file);
         
@@ -122,6 +127,11 @@ int main(int argc, char* argv[]) {
         }
         std::cout << "]" << std::endl;
         
+        // Log node addition start
+        std::ostringstream add_log;
+        add_log << "ADD | Key: " << key_str << " | Vector dimension: " << vector_data.size();
+        Logger::log_node_operation("ADD", add_log.str());
+        
         // Insert the new node
         dataTree.insert_data_object(new_obj);
         
@@ -143,9 +153,13 @@ int main(int argc, char* argv[]) {
         
         if (updated_caches > 0) {
             std::cout << "Updated " << updated_caches << " cached queries with new closer neighbor" << std::endl;
+            std::ostringstream cache_log;
+            cache_log << "ADD | Updated " << updated_caches << " cached queries";
+            Logger::log_node_operation("ADD", cache_log.str());
         }
         
         std::cout << "Node added successfully!" << std::endl;
+        Logger::log_node_operation("ADD", "Node added successfully");
         
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;

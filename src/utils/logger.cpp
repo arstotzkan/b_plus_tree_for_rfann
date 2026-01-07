@@ -1,12 +1,17 @@
 #include "logger.h"
 #include <filesystem>
 #include <iostream>
+#include <random>
+#include <iomanip>
 
 // Static member definitions
 std::ofstream Logger::log_file_;
+std::ofstream Logger::search_log_file_;
+std::ofstream Logger::index_log_file_;
 std::mutex Logger::log_mutex_;
 LogLevel Logger::min_level_ = LogLevel::INFO;
 std::string Logger::operation_type_ = "general";
+std::string Logger::session_id_ = "";
 bool Logger::initialized_ = false;
 
 void Logger::init(const std::string& index_dir, const std::string& operation_type) {
@@ -17,14 +22,21 @@ void Logger::init(const std::string& index_dir, const std::string& operation_typ
     }
     
     operation_type_ = operation_type;
-    
-    // Create log file path
-    std::filesystem::path log_path = std::filesystem::path(index_dir) / (operation_type + ".log");
+    session_id_ = generate_session_id();
     
     // Ensure directory exists
     std::filesystem::create_directories(std::filesystem::path(index_dir));
     
-    // Open log file in append mode
+    // Open search log file (unified for all search operations)
+    std::filesystem::path search_log_path = std::filesystem::path(index_dir) / "search.log";
+    search_log_file_.open(search_log_path, std::ios::app);
+    
+    // Open index log file (for index operations like add/remove node)
+    std::filesystem::path index_log_path = std::filesystem::path(index_dir) / "index.log";
+    index_log_file_.open(index_log_path, std::ios::app);
+    
+    // Open general log file for the operation type
+    std::filesystem::path log_path = std::filesystem::path(index_dir) / (operation_type + ".log");
     log_file_.open(log_path, std::ios::app);
     
     if (!log_file_.is_open()) {
@@ -36,7 +48,7 @@ void Logger::init(const std::string& index_dir, const std::string& operation_typ
     
     // Log session start
     log_file_ << "\n" << std::string(80, '=') << "\n";
-    log_file_ << "LOG SESSION START: " << get_timestamp() << " - " << operation_type << "\n";
+    log_file_ << "LOG SESSION START: " << get_timestamp() << " - " << operation_type << " [Session ID: " << session_id_ << "]\n";
     log_file_ << std::string(80, '=') << "\n";
     log_file_.flush();
 }
@@ -91,7 +103,16 @@ void Logger::log_query(const std::string& query_type, const std::string& paramet
         << std::fixed << std::setprecision(3) << duration_ms << " ms | " 
         << result_count << " results";
     
-    write_log(LogLevel::INFO, oss.str());
+    write_log(LogLevel::INFO, oss.str(), "search");
+}
+
+void Logger::log_node_operation(const std::string& operation, const std::string& details) {
+    if (!initialized_) return;
+    
+    std::ostringstream oss;
+    oss << "NODE_OP: " << operation << " | " << details;
+    
+    write_log(LogLevel::INFO, oss.str(), "index");
 }
 
 void Logger::close() {
@@ -103,11 +124,36 @@ void Logger::close() {
         log_file_.close();
     }
     
+    if (search_log_file_.is_open()) {
+        search_log_file_.close();
+    }
+    
+    if (index_log_file_.is_open()) {
+        index_log_file_.close();
+    }
+    
     initialized_ = false;
 }
 
 void Logger::set_log_level(LogLevel level) {
     min_level_ = level;
+}
+
+std::string Logger::get_session_id() {
+    return session_id_;
+}
+
+std::string Logger::generate_session_id() {
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
+    
+    std::ostringstream oss;
+    oss << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S");
+    oss << "_" << std::setfill('0') << std::setw(3) << ms.count();
+    
+    return oss.str();
 }
 
 std::string Logger::get_timestamp() {
@@ -133,16 +179,25 @@ std::string Logger::level_to_string(LogLevel level) {
     }
 }
 
-void Logger::write_log(LogLevel level, const std::string& message) {
+void Logger::write_log(LogLevel level, const std::string& message, const std::string& log_type) {
     std::lock_guard<std::mutex> lock(log_mutex_);
     
-    if (!log_file_.is_open()) return;
+    std::string formatted_msg = "[" + get_timestamp() + "] [" + level_to_string(level) + "] [" + session_id_ + "] " + message;
     
-    log_file_ << "[" << get_timestamp() << "] [" << level_to_string(level) << "] " << message << "\n";
-    log_file_.flush();
+    // Write to appropriate log file based on type
+    if (log_type == "search" && search_log_file_.is_open()) {
+        search_log_file_ << formatted_msg << "\n";
+        search_log_file_.flush();
+    } else if (log_type == "index" && index_log_file_.is_open()) {
+        index_log_file_ << formatted_msg << "\n";
+        index_log_file_.flush();
+    } else if (log_file_.is_open()) {
+        log_file_ << formatted_msg << "\n";
+        log_file_.flush();
+    }
     
     // Also output to console for important messages
     if (level >= LogLevel::WARNING) {
-        std::cout << "[" << level_to_string(level) << "] " << message << std::endl;
+        std::cout << formatted_msg << std::endl;
     }
 }

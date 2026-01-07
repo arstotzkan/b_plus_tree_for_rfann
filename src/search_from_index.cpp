@@ -193,7 +193,9 @@ int main(int argc, char* argv[]) {
         std::cout << "Index directory: " << index_dir << std::endl;
         std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
         std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled") << std::endl;
+        if (use_parallel) std::cout << "Threads: " << (num_threads > 0 ? std::to_string(num_threads) : "auto-detect") << std::endl;
         std::cout << "Search value: " << search_value << std::endl;
+        std::cout << "Starting search..." << std::endl;
         
         if (has_vector && has_k) {
             // Use optimized KNN search for value queries with vector
@@ -212,7 +214,9 @@ int main(int argc, char* argv[]) {
         std::cout << "Index directory: " << index_dir << std::endl;
         std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
         std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled") << std::endl;
+        if (use_parallel) std::cout << "Threads: " << (num_threads > 0 ? std::to_string(num_threads) : "auto-detect") << std::endl;
         std::cout << "Range: [" << min_key << ", " << max_key << "]" << std::endl;
+        std::cout << "Starting search..." << std::endl;
         
         if (has_vector && has_k) {
             // Use optimized KNN search for range queries with vector

@@ -36,21 +36,31 @@ public:
     // Log query details
     static void log_query(const std::string& query_type, const std::string& parameters, double duration_ms, int result_count);
     
+    // Log node operations (add/remove)
+    static void log_node_operation(const std::string& operation, const std::string& details);
+    
     // Flush and close logger
     static void close();
     
     // Set minimum log level
     static void set_log_level(LogLevel level);
+    
+    // Get current session ID
+    static std::string get_session_id();
 
 private:
     static std::string get_timestamp();
     static std::string level_to_string(LogLevel level);
-    static void write_log(LogLevel level, const std::string& message);
+    static void write_log(LogLevel level, const std::string& message, const std::string& log_type = "general");
+    static std::string generate_session_id();
     
     static std::ofstream log_file_;
+    static std::ofstream search_log_file_;
+    static std::ofstream index_log_file_;
     static std::mutex log_mutex_;
     static LogLevel min_level_;
     static std::string operation_type_;
+    static std::string session_id_;
     static bool initialized_;
 };
 

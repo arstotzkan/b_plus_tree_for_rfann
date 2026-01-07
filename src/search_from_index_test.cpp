@@ -269,6 +269,10 @@ int main(int argc, char* argv[]) {
 
     // Run batch queries
     std::cout << "=== Running " << queries_to_run << " RFANN Queries ===" << std::endl;
+    std::cout << "Configuration: K=" << k_neighbors << " | Range=[" << min_key << "," << max_key << "]" << std::endl;
+    std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled");
+    if (use_parallel) std::cout << " | Threads: " << (num_threads > 0 ? std::to_string(num_threads) : "auto-detect");
+    std::cout << std::endl << std::endl;
     
     double total_recall = 0.0;
     long long total_range_time = 0;
@@ -286,15 +290,26 @@ int main(int argc, char* argv[]) {
             auto cache_start = std::chrono::high_resolution_clock::now();
             CachedQueryResult cached = cache.get_cached_result(query_hash, k_neighbors);
             auto cache_end = std::chrono::high_resolution_clock::now();
-            total_range_time += std::chrono::duration_cast<std::chrono::microseconds>(cache_end - cache_start).count();
+            long long cache_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_end - cache_start).count();
+            total_range_time += cache_duration;
             
             for (const auto& neighbor : cached.neighbors) {
                 retrieved.push_back(neighbor.key);
             }
             cache_hits++;
+            
+            // Log cache hit
+            std::ostringstream cache_log;
+            cache_log << "Query #" << (q + 1) << " | CACHE HIT | Results: " << cached.neighbors.size();
+            Logger::log_query("KNN_CACHE", cache_log.str(), cache_duration / 1000.0, cached.neighbors.size());
         } else {
             // Optimized KNN search (parallel or single-threaded)
             auto knn_start = std::chrono::high_resolution_clock::now();
+            
+            std::ostringstream progress_log;
+            progress_log << "Query #" << (q + 1) << " | Starting KNN search (K=" << k_neighbors << ", Range=[" << min_key << "," << max_key << "])";
+            Logger::log_query("KNN_PROGRESS", progress_log.str(), 0.0, 0);
+            
             std::vector<DataObject*> knn_results;
             if (use_parallel) {
                 knn_results = dataTree.search_knn_parallel(query_vec, min_key, max_key, k_neighbors, num_threads);
@@ -305,16 +320,20 @@ int main(int argc, char* argv[]) {
             auto query_duration = std::chrono::duration_cast<std::chrono::microseconds>(knn_end - knn_start).count();
             total_range_time += query_duration;
 
-            // Log individual query performance
+            // Log individual query performance with detailed breakdown
             std::ostringstream query_params;
-            query_params << "Query #" << (q + 1) << " | K=" << k_neighbors << " | Range=[" << min_key << "," << max_key << "]";
+            query_params << "Query #" << (q + 1) << " | K=" << k_neighbors << " | Range=[" << min_key << "," << max_key << "] | Results: " << knn_results.size() << " | Time: " << (query_duration / 1000.0) << " ms";
             Logger::log_query("KNN", query_params.str(), query_duration / 1000.0, knn_results.size());
 
             if (knn_results.empty()) {
+                std::ostringstream empty_log;
+                empty_log << "Query #" << (q + 1) << " | No results found in range [" << min_key << "," << max_key << "]";
+                Logger::log_query("KNN_PROGRESS", empty_log.str(), 0.0, 0);
                 continue;
             }
 
             // Results are already sorted by distance, prepare cache data
+            auto cache_prep_start = std::chrono::high_resolution_clock::now();
             std::vector<CachedNeighbor> results_for_cache;
             for (size_t i = 0; i < knn_results.size(); i++) {
                 int key = knn_results[i]->is_int_value() ? 
@@ -328,11 +347,21 @@ int main(int argc, char* argv[]) {
                 neighbor.distance = calculate_distance(query_vec, neighbor.vector);
                 results_for_cache.push_back(neighbor);
             }
+            auto cache_prep_end = std::chrono::high_resolution_clock::now();
+            auto cache_prep_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_prep_end - cache_prep_start).count();
 
             // Store in cache
+            auto cache_store_start = std::chrono::high_resolution_clock::now();
             if (cache_enabled && !results_for_cache.empty()) {
                 cache.store_result(query_hash, query_vec, min_key, max_key, k_neighbors, results_for_cache);
             }
+            auto cache_store_end = std::chrono::high_resolution_clock::now();
+            auto cache_store_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_store_end - cache_store_start).count();
+
+            // Log post-processing times
+            std::ostringstream postproc_log;
+            postproc_log << "Query #" << (q + 1) << " | Post-processing: prep=" << (cache_prep_duration / 1000.0) << "ms, cache_store=" << (cache_store_duration / 1000.0) << "ms";
+            Logger::log_query("KNN_PROGRESS", postproc_log.str(), 0.0, 0);
 
             // Clean up
             for (DataObject* obj : knn_results) {
