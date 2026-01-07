@@ -187,10 +187,10 @@ int QueryCache::update_for_inserted_object(int key, const std::vector<float>& ve
             
             result.neighbors.insert(insert_pos, new_neighbor);
             
-            // If we now have more than max_k neighbors, remove the furthest
-            if (static_cast<int>(result.neighbors.size()) > result.max_k) {
-                result.neighbors.pop_back();
-            }
+            // Keep displaced neighbors: if we had exactly max_k neighbors and inserted a new one,
+            // the old Kth neighbor becomes the (K+1)th neighbor.
+            // This allows the cache to grow and serve higher K queries in the future.
+            result.neighbors.pop_back();
             
             result.last_used_date = std::time(nullptr);
             save_query_result(result);
