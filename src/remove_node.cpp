@@ -126,6 +126,10 @@ int main(int argc, char* argv[]) {
         if (vec.size() > 5) std::cout << ", ... (" << vec.size() << " dims)";
         std::cout << "]" << std::endl;
         
+        // Store the vector of the object to be deleted (for cache update)
+        std::vector<float> deleted_vector;
+        int key_for_cache = is_float_key ? static_cast<int>(std::stof(key_str)) : std::stoi(key_str);
+        
         // Perform deletion
         std::cout << std::endl;
         
@@ -137,10 +141,12 @@ int main(int argc, char* argv[]) {
             // Create DataObject with the provided vector and key
             int key_val = is_float_key ? static_cast<int>(std::stof(key_str)) : std::stoi(key_str);
             DataObject obj_to_delete(vector_data, key_val);
+            deleted_vector = vector_data;
             deleted = dataTree.delete_data_object(obj_to_delete);
         } else {
             // Delete first entry with this key (use the found object)
             std::cout << "Deleting first entry with key " << key_str << "..." << std::endl;
+            deleted_vector = found_obj->get_vector();
             deleted = dataTree.delete_data_object(*found_obj);
         }
         
@@ -151,13 +157,11 @@ int main(int argc, char* argv[]) {
         if (deleted) {
             std::cout << "Successfully deleted node with key " << key_str << std::endl;
             
-            // Invalidate affected cache entries
-            int key_for_cache = is_float_key ? static_cast<int>(std::stof(key_str)) : std::stoi(key_str);
-            auto affected_queries = cache.get_queries_containing_key(key_for_cache);
+            // Update affected cache entries by removing the deleted object
+            int updated_caches = cache.update_for_deleted_object(key_for_cache, deleted_vector);
             
-            if (!affected_queries.empty()) {
-                std::cout << "Invalidating " << affected_queries.size() << " cached queries that contained key " << key_for_cache << std::endl;
-                cache.invalidate_for_key(key_for_cache);
+            if (updated_caches > 0) {
+                std::cout << "Updated " << updated_caches << " cached queries to remove deleted entry" << std::endl;
             }
             
             // Verify deletion

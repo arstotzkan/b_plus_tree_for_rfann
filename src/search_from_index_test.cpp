@@ -270,16 +270,16 @@ int main(int argc, char* argv[]) {
         const std::vector<float>& query_vec = queries[q];
         std::vector<int> retrieved;
         
-        std::string query_hash = cache.compute_query_hash(query_vec, min_key, max_key, k_neighbors);
+        std::string query_hash = cache.compute_query_hash(query_vec, min_key, max_key);
         
-        if (cache_enabled && cache.has_cached_result(query_hash)) {
+        if (cache_enabled && cache.has_cached_result(query_hash, k_neighbors)) {
             auto cache_start = std::chrono::high_resolution_clock::now();
-            CachedQueryResult cached = cache.get_cached_result(query_hash);
+            CachedQueryResult cached = cache.get_cached_result(query_hash, k_neighbors);
             auto cache_end = std::chrono::high_resolution_clock::now();
             total_range_time += std::chrono::duration_cast<std::chrono::microseconds>(cache_end - cache_start).count();
             
-            for (const auto& obj : cached.output_objects) {
-                retrieved.push_back(obj.second);
+            for (const auto& neighbor : cached.neighbors) {
+                retrieved.push_back(neighbor.key);
             }
             cache_hits++;
         } else {
@@ -305,13 +305,18 @@ int main(int argc, char* argv[]) {
             }
 
             // Results are already sorted by distance, prepare cache data
-            std::vector<std::pair<std::vector<float>, int>> results_for_cache;
+            std::vector<CachedNeighbor> results_for_cache;
             for (size_t i = 0; i < knn_results.size(); i++) {
                 int key = knn_results[i]->is_int_value() ? 
                     knn_results[i]->get_int_value() : 
                     static_cast<int>(knn_results[i]->get_float_value());
                 retrieved.push_back(key);
-                results_for_cache.push_back({knn_results[i]->get_vector(), key});
+                
+                CachedNeighbor neighbor;
+                neighbor.vector = knn_results[i]->get_vector();
+                neighbor.key = key;
+                neighbor.distance = calculate_distance(query_vec, neighbor.vector);
+                results_for_cache.push_back(neighbor);
             }
 
             // Store in cache

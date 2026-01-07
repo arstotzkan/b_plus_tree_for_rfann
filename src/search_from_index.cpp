@@ -241,20 +241,25 @@ int main(int argc, char* argv[]) {
         int cache_min = has_value ? search_value : min_key;
         int cache_max = has_value ? search_value : max_key;
         
-        // Check cache first
-        std::string query_hash = cache.compute_query_hash(query_vector, cache_min, cache_max, k_neighbors);
+        // Check cache first (K is not part of hash - cache stores max K seen)
+        std::string query_hash = cache.compute_query_hash(query_vector, cache_min, cache_max);
         bool cache_hit = false;
         
-        if (cache_enabled && cache.has_cached_result(query_hash)) {
+        if (cache_enabled && cache.has_cached_result(query_hash, k_neighbors)) {
             auto cache_start = std::chrono::high_resolution_clock::now();
-            CachedQueryResult cached = cache.get_cached_result(query_hash);
+            CachedQueryResult cached = cache.get_cached_result(query_hash, k_neighbors);
             auto cache_end = std::chrono::high_resolution_clock::now();
             auto cache_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_end - cache_start);
             
-            std::cout << "Cache HIT! Retrieved " << cached.output_objects.size() << " cached results:" << std::endl;
-            for (size_t i = 0; i < cached.output_objects.size(); i++) {
-                double dist = calculate_distance(query_vector, cached.output_objects[i].first);
-                std::cout << "  #" << (i+1) << " (dist=" << dist << ", key=" << cached.output_objects[i].second << ")" << std::endl;
+            std::cout << "Cache HIT! Retrieved " << cached.neighbors.size() << " cached results:" << std::endl;
+            for (size_t i = 0; i < cached.neighbors.size(); i++) {
+                std::cout << "  #" << (i+1) << " (dist=" << cached.neighbors[i].distance << "): [";
+                const auto& vec = cached.neighbors[i].vector;
+                for (size_t j = 0; j < vec.size(); j++) {
+                    std::cout << vec[j];
+                    if (j < vec.size() - 1) std::cout << ", ";
+                }
+                std::cout << "]  (" << cached.neighbors[i].key << ")" << std::endl;
             }
             
             std::cout << std::endl << "Query execution time (from cache): " << cache_duration.count() << " us" << std::endl;
@@ -270,16 +275,19 @@ int main(int argc, char* argv[]) {
             // Results are already sorted by distance from optimized KNN search
             std::cout << "Found and sorted " << results.size() << " nearest neighbors:" << std::endl;
             
-            std::vector<std::pair<std::vector<float>, int>> results_for_cache;
+            std::vector<CachedNeighbor> results_for_cache;
             for (size_t i = 0; i < results.size(); i++) {
                 double dist = calculate_distance(query_vector, results[i]->get_vector());
                 std::cout << "  #" << (i+1) << " (dist=" << dist << "): ";
                 results[i]->print();
                 
-                int obj_key = results[i]->is_int_value() ? 
+                CachedNeighbor neighbor;
+                neighbor.vector = results[i]->get_vector();
+                neighbor.key = results[i]->is_int_value() ? 
                     results[i]->get_int_value() : 
                     static_cast<int>(results[i]->get_float_value());
-                results_for_cache.push_back({results[i]->get_vector(), obj_key});
+                neighbor.distance = dist;
+                results_for_cache.push_back(neighbor);
             }
 
             // Store in cache

@@ -49,7 +49,7 @@ void QueryCache::ensure_directories() {
 }
 
 std::string QueryCache::compute_query_hash(const std::vector<float>& query_vector, 
-                                            int min_key, int max_key, int k) const {
+                                            int min_key, int max_key) const {
     uint64_t hash = 14695981039346656037ULL;
     const uint64_t prime = 1099511628211ULL;
     
@@ -64,23 +64,33 @@ std::string QueryCache::compute_query_hash(const std::vector<float>& query_vecto
     hash *= prime;
     hash ^= static_cast<uint64_t>(max_key);
     hash *= prime;
-    hash ^= static_cast<uint64_t>(k);
-    hash *= prime;
     
     return uint64_to_hex(hash);
 }
 
-bool QueryCache::has_cached_result(const std::string& query_id) const {
+bool QueryCache::has_cached_result(const std::string& query_id, int k) const {
     if (!enabled_) return false;
-    return query_ranges_.find(query_id) != query_ranges_.end();
+    if (query_ranges_.find(query_id) == query_ranges_.end()) return false;
+    
+    // Load and check if we have at least k neighbors cached
+    CachedQueryResult result;
+    if (!load_query_result(query_id, result)) return false;
+    
+    return static_cast<int>(result.neighbors.size()) >= k;
 }
 
-CachedQueryResult QueryCache::get_cached_result(const std::string& query_id) {
+CachedQueryResult QueryCache::get_cached_result(const std::string& query_id, int k) {
     CachedQueryResult result;
     if (!enabled_) return result;
     
     if (load_query_result(query_id, result)) {
         result.last_used_date = std::time(nullptr);
+        
+        // Return only first k neighbors
+        if (static_cast<int>(result.neighbors.size()) > k) {
+            result.neighbors.resize(k);
+        }
+        
         save_query_result(result);
     }
     return result;
@@ -89,22 +99,34 @@ CachedQueryResult QueryCache::get_cached_result(const std::string& query_id) {
 void QueryCache::store_result(const std::string& query_id,
                               const std::vector<float>& input_vector,
                               int min_key, int max_key, int k,
-                              const std::vector<std::pair<std::vector<float>, int>>& results) {
+                              const std::vector<CachedNeighbor>& results) {
     if (!enabled_) return;
+    
+    // Check if we already have a cached result
+    CachedQueryResult existing;
+    bool has_existing = load_query_result(query_id, existing);
+    
+    if (has_existing && existing.max_k >= k) {
+        // Existing cache has same or more neighbors, don't update
+        return;
+    }
     
     CachedQueryResult cached;
     cached.query_id = query_id;
-    cached.created_date = std::time(nullptr);
-    cached.last_used_date = cached.created_date;
+    cached.created_date = has_existing ? existing.created_date : std::time(nullptr);
+    cached.last_used_date = std::time(nullptr);
     cached.input_vector = input_vector;
     cached.min_key = min_key;
     cached.max_key = max_key;
-    cached.k_neighbors = k;
-    cached.output_objects = results;
+    cached.max_k = k;
+    cached.neighbors = results;
     
     save_query_result(cached);
-    add_to_inverted_index(query_id, min_key, max_key);
-    save_inverted_index();
+    
+    if (!has_existing) {
+        add_to_inverted_index(query_id, min_key, max_key);
+        save_inverted_index();
+    }
     
     enforce_cache_limit();
 }
@@ -126,42 +148,113 @@ void QueryCache::invalidate_for_key(int key) {
     }
 }
 
-void QueryCache::invalidate_if_affected(int key, const std::vector<float>& new_vector,
-                                         std::function<double(const std::vector<float>&, const std::vector<float>&)> distance_fn) {
-    if (!enabled_) return;
+int QueryCache::update_for_inserted_object(int key, const std::vector<float>& vector,
+                                            std::function<double(const std::vector<float>&, const std::vector<float>&)> distance_fn) {
+    if (!enabled_) return 0;
     
-    // Use interval tree for efficient O(log N) lookup instead of O(N) linear search
-    std::vector<std::string> queries_to_check;
-    find_overlapping_intervals(interval_root_.get(), key, queries_to_check);
+    // Find all queries whose range contains this key
+    std::vector<std::string> affected_queries;
+    find_overlapping_intervals(interval_root_.get(), key, affected_queries);
     
-    if (queries_to_check.empty()) return;
+    if (affected_queries.empty()) return 0;
     
-    bool any_removed = false;
-    for (const auto& query_id : queries_to_check) {
+    int updated_count = 0;
+    
+    for (const auto& query_id : affected_queries) {
         CachedQueryResult result;
         if (!load_query_result(query_id, result)) continue;
-        if (result.output_objects.empty()) continue;
+        if (result.neighbors.empty()) continue;
         
-        double new_dist = distance_fn(result.input_vector, new_vector);
+        // Calculate distance from query vector to new object
+        double new_dist = distance_fn(result.input_vector, vector);
         
-        double farthest_dist = 0.0;
-        for (const auto& obj : result.output_objects) {
-            double dist = distance_fn(result.input_vector, obj.first);
-            if (dist > farthest_dist) {
-                farthest_dist = dist;
+        // Get the furthest cached neighbor's distance
+        double furthest_dist = result.neighbors.back().distance;
+        
+        // If new object is closer than furthest cached neighbor, insert it
+        if (new_dist < furthest_dist || static_cast<int>(result.neighbors.size()) < result.max_k) {
+            // Create new neighbor entry
+            CachedNeighbor new_neighbor;
+            new_neighbor.vector = vector;
+            new_neighbor.key = key;
+            new_neighbor.distance = new_dist;
+            
+            // Find insertion position (keep sorted by distance)
+            auto insert_pos = std::lower_bound(result.neighbors.begin(), result.neighbors.end(), new_neighbor,
+                [](const CachedNeighbor& a, const CachedNeighbor& b) {
+                    return a.distance < b.distance;
+                });
+            
+            result.neighbors.insert(insert_pos, new_neighbor);
+            
+            // If we now have more than max_k neighbors, remove the furthest
+            if (static_cast<int>(result.neighbors.size()) > result.max_k) {
+                result.neighbors.pop_back();
+            }
+            
+            result.last_used_date = std::time(nullptr);
+            save_query_result(result);
+            updated_count++;
+        }
+    }
+    
+    return updated_count;
+}
+
+int QueryCache::update_for_deleted_object(int key, const std::vector<float>& vector) {
+    if (!enabled_) return 0;
+    
+    // Find all queries whose range contains this key
+    std::vector<std::string> affected_queries;
+    find_overlapping_intervals(interval_root_.get(), key, affected_queries);
+    
+    if (affected_queries.empty()) return 0;
+    
+    int updated_count = 0;
+    const float epsilon = 1e-3f;
+    
+    for (const auto& query_id : affected_queries) {
+        CachedQueryResult result;
+        if (!load_query_result(query_id, result)) continue;
+        
+        // Find and remove the deleted object from neighbors
+        bool found = false;
+        auto it = result.neighbors.begin();
+        while (it != result.neighbors.end()) {
+            if (it->key == key) {
+                // Compare vectors
+                bool vectors_match = true;
+                if (it->vector.size() == vector.size()) {
+                    for (size_t i = 0; i < vector.size(); i++) {
+                        if (std::abs(it->vector[i] - vector[i]) > epsilon) {
+                            vectors_match = false;
+                            break;
+                        }
+                    }
+                } else {
+                    vectors_match = false;
+                }
+                
+                if (vectors_match) {
+                    it = result.neighbors.erase(it);
+                    found = true;
+                    break;  // Only remove first match
+                } else {
+                    ++it;
+                }
+            } else {
+                ++it;
             }
         }
         
-        if (new_dist < farthest_dist) {
-            remove_from_inverted_index(query_id);
-            delete_query_result(query_id);
-            any_removed = true;
+        if (found) {
+            result.last_used_date = std::time(nullptr);
+            save_query_result(result);
+            updated_count++;
         }
     }
     
-    if (any_removed) {
-        save_inverted_index();
-    }
+    return updated_count;
 }
 
 void QueryCache::load_config(const std::string& config_path) {
@@ -232,23 +325,24 @@ bool QueryCache::load_query_result(const std::string& query_id, CachedQueryResul
     file.read(reinterpret_cast<char*>(&result.last_used_date), sizeof(result.last_used_date));
     file.read(reinterpret_cast<char*>(&result.min_key), sizeof(result.min_key));
     file.read(reinterpret_cast<char*>(&result.max_key), sizeof(result.max_key));
-    file.read(reinterpret_cast<char*>(&result.k_neighbors), sizeof(result.k_neighbors));
+    file.read(reinterpret_cast<char*>(&result.max_k), sizeof(result.max_k));
     
     uint32_t vec_size;
     file.read(reinterpret_cast<char*>(&vec_size), sizeof(vec_size));
     result.input_vector.resize(vec_size);
     file.read(reinterpret_cast<char*>(result.input_vector.data()), vec_size * sizeof(float));
     
-    uint32_t num_results;
-    file.read(reinterpret_cast<char*>(&num_results), sizeof(num_results));
-    result.output_objects.resize(num_results);
+    uint32_t num_neighbors;
+    file.read(reinterpret_cast<char*>(&num_neighbors), sizeof(num_neighbors));
+    result.neighbors.resize(num_neighbors);
     
-    for (uint32_t i = 0; i < num_results; i++) {
-        uint32_t obj_vec_size;
-        file.read(reinterpret_cast<char*>(&obj_vec_size), sizeof(obj_vec_size));
-        result.output_objects[i].first.resize(obj_vec_size);
-        file.read(reinterpret_cast<char*>(result.output_objects[i].first.data()), obj_vec_size * sizeof(float));
-        file.read(reinterpret_cast<char*>(&result.output_objects[i].second), sizeof(int));
+    for (uint32_t i = 0; i < num_neighbors; i++) {
+        uint32_t neighbor_vec_size;
+        file.read(reinterpret_cast<char*>(&neighbor_vec_size), sizeof(neighbor_vec_size));
+        result.neighbors[i].vector.resize(neighbor_vec_size);
+        file.read(reinterpret_cast<char*>(result.neighbors[i].vector.data()), neighbor_vec_size * sizeof(float));
+        file.read(reinterpret_cast<char*>(&result.neighbors[i].key), sizeof(int));
+        file.read(reinterpret_cast<char*>(&result.neighbors[i].distance), sizeof(double));
     }
     
     return file.good();
@@ -263,20 +357,21 @@ void QueryCache::save_query_result(const CachedQueryResult& result) {
     file.write(reinterpret_cast<const char*>(&result.last_used_date), sizeof(result.last_used_date));
     file.write(reinterpret_cast<const char*>(&result.min_key), sizeof(result.min_key));
     file.write(reinterpret_cast<const char*>(&result.max_key), sizeof(result.max_key));
-    file.write(reinterpret_cast<const char*>(&result.k_neighbors), sizeof(result.k_neighbors));
+    file.write(reinterpret_cast<const char*>(&result.max_k), sizeof(result.max_k));
     
     uint32_t vec_size = static_cast<uint32_t>(result.input_vector.size());
     file.write(reinterpret_cast<const char*>(&vec_size), sizeof(vec_size));
     file.write(reinterpret_cast<const char*>(result.input_vector.data()), vec_size * sizeof(float));
     
-    uint32_t num_results = static_cast<uint32_t>(result.output_objects.size());
-    file.write(reinterpret_cast<const char*>(&num_results), sizeof(num_results));
+    uint32_t num_neighbors = static_cast<uint32_t>(result.neighbors.size());
+    file.write(reinterpret_cast<const char*>(&num_neighbors), sizeof(num_neighbors));
     
-    for (const auto& obj : result.output_objects) {
-        uint32_t obj_vec_size = static_cast<uint32_t>(obj.first.size());
-        file.write(reinterpret_cast<const char*>(&obj_vec_size), sizeof(obj_vec_size));
-        file.write(reinterpret_cast<const char*>(obj.first.data()), obj_vec_size * sizeof(float));
-        file.write(reinterpret_cast<const char*>(&obj.second), sizeof(int));
+    for (const auto& neighbor : result.neighbors) {
+        uint32_t neighbor_vec_size = static_cast<uint32_t>(neighbor.vector.size());
+        file.write(reinterpret_cast<const char*>(&neighbor_vec_size), sizeof(neighbor_vec_size));
+        file.write(reinterpret_cast<const char*>(neighbor.vector.data()), neighbor_vec_size * sizeof(float));
+        file.write(reinterpret_cast<const char*>(&neighbor.key), sizeof(int));
+        file.write(reinterpret_cast<const char*>(&neighbor.distance), sizeof(double));
     }
 }
 

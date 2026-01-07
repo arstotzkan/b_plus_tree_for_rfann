@@ -9,6 +9,13 @@
 #include <functional>
 #include "DataObject.h"
 
+// Cached neighbor with distance for sorted storage
+struct CachedNeighbor {
+    std::vector<float> vector;
+    int key;
+    double distance;  // Distance from query vector
+};
+
 struct CachedQueryResult {
     std::string query_id;
     std::time_t created_date;
@@ -16,8 +23,8 @@ struct CachedQueryResult {
     std::vector<float> input_vector;
     int min_key;
     int max_key;
-    int k_neighbors;
-    std::vector<std::pair<std::vector<float>, int>> output_objects;
+    int max_k;  // Maximum K stored (highest K ever requested for this query)
+    std::vector<CachedNeighbor> neighbors;  // Sorted by distance (nearest first)
 };
 
 struct CacheConfig {
@@ -33,21 +40,31 @@ public:
     void set_enabled(bool enabled);
     bool is_enabled() const;
 
-    std::string compute_query_hash(const std::vector<float>& query_vector, int min_key, int max_key, int k) const;
+    // Compute hash from vector/min/max only (K is not part of the hash)
+    std::string compute_query_hash(const std::vector<float>& query_vector, int min_key, int max_key) const;
 
-    bool has_cached_result(const std::string& query_id) const;
+    // Check if cache has result with at least k neighbors
+    bool has_cached_result(const std::string& query_id, int k) const;
 
-    CachedQueryResult get_cached_result(const std::string& query_id);
+    // Get cached result, returns only first k neighbors
+    CachedQueryResult get_cached_result(const std::string& query_id, int k);
 
+    // Store result - updates existing cache if new K is higher
     void store_result(const std::string& query_id,
                       const std::vector<float>& input_vector,
                       int min_key, int max_key, int k,
-                      const std::vector<std::pair<std::vector<float>, int>>& results);
+                      const std::vector<CachedNeighbor>& results);
+
+    // Update cache when a new DataObject is inserted into the tree
+    // Returns number of caches updated
+    int update_for_inserted_object(int key, const std::vector<float>& vector,
+                                   std::function<double(const std::vector<float>&, const std::vector<float>&)> distance_fn);
+
+    // Update cache when a DataObject is deleted from the tree
+    // Returns number of caches updated
+    int update_for_deleted_object(int key, const std::vector<float>& vector);
 
     void invalidate_for_key(int key);
-
-    void invalidate_if_affected(int key, const std::vector<float>& new_vector,
-                                 std::function<double(const std::vector<float>&, const std::vector<float>&)> distance_fn);
 
     void load_config(const std::string& config_path);
     void enforce_cache_limit();

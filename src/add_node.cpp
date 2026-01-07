@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <cmath>
 
 // Parse comma-separated vector string into vector<float>
 std::vector<float> parse_vector(const std::string& str) {
@@ -124,13 +125,24 @@ int main(int argc, char* argv[]) {
         // Insert the new node
         dataTree.insert_data_object(new_obj);
         
-        // Invalidate affected cache entries
+        // Update affected cache entries - insert new object if it's closer than furthest cached neighbor
         int key_for_cache = is_float_key ? static_cast<int>(std::stof(key_str)) : std::stoi(key_str);
-        auto affected_queries = cache.get_queries_containing_key(key_for_cache);
         
-        if (!affected_queries.empty()) {
-            std::cout << "Invalidating " << affected_queries.size() << " cached queries that contain key " << key_for_cache << std::endl;
-            cache.invalidate_for_key(key_for_cache);
+        // Distance function for cache update
+        auto distance_fn = [](const std::vector<float>& a, const std::vector<float>& b) -> double {
+            double sum = 0.0;
+            size_t min_size = std::min(a.size(), b.size());
+            for (size_t i = 0; i < min_size; i++) {
+                double diff = a[i] - b[i];
+                sum += diff * diff;
+            }
+            return std::sqrt(sum);
+        };
+        
+        int updated_caches = cache.update_for_inserted_object(key_for_cache, vector_data, distance_fn);
+        
+        if (updated_caches > 0) {
+            std::cout << "Updated " << updated_caches << " cached queries with new closer neighbor" << std::endl;
         }
         
         std::cout << "Node added successfully!" << std::endl;
