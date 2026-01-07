@@ -89,3 +89,9 @@ add_executable(read_cache
     read_cache.cpp
     ${COMMON_SOURCES}
 )
+
+# Cache clear utility (erase all cache files)
+add_executable(clear_cache
+    clear_cache.cpp
+    ${COMMON_SOURCES}
+)

@@ -74,6 +74,11 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: Cannot create index directory: " << index_dir << std::endl;
         return 1;
     }
+    
+    // Save cache configuration
+    if (!idx_dir.save_cache_config(cache_enabled)) {
+        std::cerr << "Warning: Failed to save cache configuration" << std::endl;
+    }
 
     // Configure B+ tree based on vector dimension
     uint32_t order = (custom_order > 0) ? static_cast<uint32_t>(custom_order) : 4;

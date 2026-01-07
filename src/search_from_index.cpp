@@ -156,6 +156,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Check index cache configuration - this overrides command line --no-cache
+    bool index_cache_enabled = idx_dir.read_cache_config();
+    if (cache_enabled && !index_cache_enabled) {
+        std::cout << "Note: Index was created with --no-cache, disabling cache for this query." << std::endl;
+        cache_enabled = false;
+    }
+
     // Initialize logging
     Logger::init(index_dir, "query");
     Logger::set_log_level(LogLevel::DEBUG);

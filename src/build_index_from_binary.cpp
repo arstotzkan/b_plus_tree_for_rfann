@@ -61,6 +61,11 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: Cannot create index directory: " << index_dir << std::endl;
         return 1;
     }
+    
+    // Save cache configuration
+    if (!idx_dir.save_cache_config(cache_enabled)) {
+        std::cerr << "Warning: Failed to save cache configuration" << std::endl;
+    }
 
     // Open binary file
     std::ifstream file(input_path, std::ios::binary);

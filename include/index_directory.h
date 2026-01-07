@@ -17,6 +17,8 @@ public:
     bool cache_exists() const;
     
     static bool create_default_config(const std::string& config_path);
+    bool save_cache_config(bool cache_enabled) const;
+    bool read_cache_config() const;
 
 private:
     std::string base_dir_;

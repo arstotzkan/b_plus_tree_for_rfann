@@ -164,10 +164,20 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Check index cache configuration - this overrides command line --no-cache
+    bool index_cache_enabled = idx_dir.read_cache_config();
+    if (cache_enabled && !index_cache_enabled) {
+        std::cout << "Note: Index was created with --no-cache, disabling cache for this benchmark." << std::endl;
+        cache_enabled = false;
+    }
+
     std::cout << "=== RFANN B+ Tree Benchmark ===" << std::endl;
     std::cout << "Index directory: " << index_dir << std::endl;
     std::cout << "Index file: " << idx_dir.get_index_file_path() << std::endl;
     std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
+    if (!index_cache_enabled) {
+        std::cout << "Cache disabled by index configuration (--no-cache used during build)" << std::endl;
+    }
 
     // Initialize logging
     Logger::init(index_dir, "search_test");
@@ -347,8 +357,11 @@ int main(int argc, char* argv[]) {
     // Print results
     std::cout << std::endl << "=== Benchmark Results ===" << std::endl;
     std::cout << "Total queries: " << queries_to_run << std::endl;
-    if (cache_enabled) {
-        std::cout << "Cache hits: " << cache_hits << " (" << (cache_hits * 100.0 / queries_to_run) << "%)" << std::endl;
+    std::cout << "Cache hits: " << cache_hits << std::endl;
+    std::cout << "Tree searches: " << (queries_to_run - cache_hits) << std::endl;
+    if (cache_enabled && queries_to_run > 0) {
+        double cache_hit_rate = (double)cache_hits / queries_to_run * 100.0;
+        std::cout << "Cache hit rate: " << std::fixed << std::setprecision(1) << cache_hit_rate << "%" << std::endl;
     }
     std::cout << "Average range search time: " << (total_range_time / queries_to_run) << " us" << std::endl;
     std::cout << "Average KNN time: " << (total_knn_time / queries_to_run) << " us" << std::endl;
