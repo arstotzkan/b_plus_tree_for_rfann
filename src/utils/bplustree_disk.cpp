@@ -1353,11 +1353,12 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_parallel(
     Logger::debug("Thread configuration: requested=" + std::to_string(num_threads) + 
                   ", hw_threads=" + std::to_string(hw_threads) + 
                   ", max_useful=" + std::to_string(max_useful_threads) + 
-                  ", actual=" + std::to_string(actual_threads));
+                  ", actual_threads=" + std::to_string(actual_threads));
     
     // For small ranges, use single-threaded version (parallel overhead not worth it)
     if (actual_threads <= 1 || range_size < MIN_TOTAL_RANGE_FOR_PARALLEL) {
         Logger::debug("Falling back to single-threaded search (range too small or threads=1)");
+        Logger::log_query("KNN_PARALLEL", "Fallback to single-threaded (range=" + std::to_string(range_size) + ", K=" + std::to_string(k) + ")", 0.0, 0);
         return search_knn_optimized(query_vector, min_key, max_key, k);
     }
     
@@ -1378,6 +1379,9 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_parallel(
     std::vector<std::vector<std::pair<double, DataObject*>>> thread_results(actual_threads);
     std::vector<std::thread> threads;
     std::mutex pm_mutex;  // Protect PageManager access (file I/O)
+    
+    // Log actual threads being used for this query
+    Logger::log_query("KNN_PARALLEL", "Threads: " + std::to_string(actual_threads) + " | Range: [" + std::to_string(min_key) + "," + std::to_string(max_key) + "] | K: " + std::to_string(k), 0.0, 0);
     
     // Worker function for each thread
     auto worker = [&](int thread_id, int sub_min, int sub_max) {
