@@ -66,6 +66,9 @@ public:
 
     void invalidate_for_key(int key);
 
+    // Public access for cache inspection utilities
+    bool load_query_result(const std::string& query_id, CachedQueryResult& result) const;
+
     void load_config(const std::string& config_path);
     void enforce_cache_limit();
     
@@ -107,7 +110,6 @@ private:
     void save_inverted_index();
 
     std::string get_query_file_path(const std::string& query_id) const;
-    bool load_query_result(const std::string& query_id, CachedQueryResult& result) const;
     void save_query_result(const CachedQueryResult& result);
     void delete_query_result(const std::string& query_id);
 

@@ -83,3 +83,9 @@ add_executable(remove_node
     remove_node.cpp
     ${COMMON_SOURCES}
 )
+
+# Cache reader utility (inspect cached queries)
+add_executable(read_cache
+    read_cache.cpp
+    ${COMMON_SOURCES}
+)
