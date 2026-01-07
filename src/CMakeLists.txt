@@ -42,21 +42,10 @@ add_executable(build_index
     ${COMMON_SOURCES}
 )
 
-# Build index from binary file executable
-add_executable(build_index_binary
-    build_index_from_binary.cpp
-    ${COMMON_SOURCES}
-)
 
 # Build index from fvecs file executable
 add_executable(build_index_fvecs
     build_index_from_fvecs.cpp
-    ${COMMON_SOURCES}
-)
-
-# Build index from npy file executable
-add_executable(build_index_npy
-    build_index_from_npy.cpp
     ${COMMON_SOURCES}
 )
 
