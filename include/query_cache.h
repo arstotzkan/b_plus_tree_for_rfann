@@ -51,6 +51,9 @@ public:
 
     void load_config(const std::string& config_path);
     void enforce_cache_limit();
+    
+    // Public API for B+ tree operations: efficiently find all queries containing a key
+    std::vector<std::string> get_queries_containing_key(int key) const;
 
     std::string get_index_dir() const { return index_dir_; }
     std::string get_cache_dir() const { return cache_dir_; }
@@ -62,8 +65,25 @@ private:
     bool enabled_;
     CacheConfig config_;
 
-    std::unordered_map<int, std::unordered_set<std::string>> key_to_queries_;
-    std::unordered_map<std::string, std::unordered_set<int>> query_to_keys_;
+    // Store range bounds instead of individual keys to avoid O(N) memory per query
+    struct QueryRange {
+        int min_key;
+        int max_key;
+    };
+    std::unordered_map<std::string, QueryRange> query_ranges_;  // query_id -> range
+    
+    // Interval tree for efficient range lookups: O(log N) instead of O(N)
+    struct IntervalNode {
+        int start, end;           // Range bounds
+        int max_end;              // Maximum end value in subtree (for pruning)
+        std::string query_id;     // Associated query ID
+        std::unique_ptr<IntervalNode> left, right;
+        
+        IntervalNode(int s, int e, const std::string& id) 
+            : start(s), end(e), max_end(e), query_id(id) {}
+    };
+    
+    std::unique_ptr<IntervalNode> interval_root_;  // Root of interval tree
 
     void ensure_directories();
     void load_inverted_index();
@@ -76,6 +96,14 @@ private:
 
     void add_to_inverted_index(const std::string& query_id, int min_key, int max_key);
     void remove_from_inverted_index(const std::string& query_id);
+    
+    // Interval tree operations for efficient range queries
+    void insert_interval(std::unique_ptr<IntervalNode>& node, int start, int end, const std::string& query_id);
+    void remove_interval(std::unique_ptr<IntervalNode>& node, const std::string& query_id);
+    void find_overlapping_intervals(const IntervalNode* node, int key, std::vector<std::string>& result) const;
+    void update_max_end(IntervalNode* node);
+    void save_interval_tree(std::ofstream& file, const IntervalNode* node) const;
+    void load_interval_tree(std::ifstream& file, std::unique_ptr<IntervalNode>& node);
 
     size_t get_cache_size() const;
     std::vector<std::pair<std::string, std::time_t>> get_queries_by_last_used() const;

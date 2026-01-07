@@ -33,6 +33,7 @@ set(COMMON_SOURCES
     utils/DataObject.cpp
     utils/query_cache.cpp
     utils/index_directory.cpp
+    utils/logger.cpp
 )
 
 # Build index with synthetic data executable
@@ -68,5 +69,17 @@ add_executable(search_index
 # Search index test executable (RFANN benchmark)
 add_executable(search_index_test
     search_from_index_test.cpp
+    ${COMMON_SOURCES}
+)
+
+# Add node executable (insert new data objects)
+add_executable(add_node
+    add_node.cpp
+    ${COMMON_SOURCES}
+)
+
+# Remove node executable (delete data objects)
+add_executable(remove_node
+    remove_node.cpp
     ${COMMON_SOURCES}
 )

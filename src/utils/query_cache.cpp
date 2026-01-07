@@ -72,7 +72,7 @@ std::string QueryCache::compute_query_hash(const std::vector<float>& query_vecto
 
 bool QueryCache::has_cached_result(const std::string& query_id) const {
     if (!enabled_) return false;
-    return query_to_keys_.find(query_id) != query_to_keys_.end();
+    return query_ranges_.find(query_id) != query_ranges_.end();
 }
 
 CachedQueryResult QueryCache::get_cached_result(const std::string& query_id) {
@@ -112,26 +112,31 @@ void QueryCache::store_result(const std::string& query_id,
 void QueryCache::invalidate_for_key(int key) {
     if (!enabled_) return;
     
-    auto it = key_to_queries_.find(key);
-    if (it == key_to_queries_.end()) return;
+    // Use interval tree for efficient O(log N) lookup instead of O(N) linear search
+    std::vector<std::string> queries_to_remove;
+    find_overlapping_intervals(interval_root_.get(), key, queries_to_remove);
     
-    std::vector<std::string> queries_to_remove(it->second.begin(), it->second.end());
     for (const auto& query_id : queries_to_remove) {
         remove_from_inverted_index(query_id);
         delete_query_result(query_id);
     }
-    save_inverted_index();
+    
+    if (!queries_to_remove.empty()) {
+        save_inverted_index();
+    }
 }
 
 void QueryCache::invalidate_if_affected(int key, const std::vector<float>& new_vector,
                                          std::function<double(const std::vector<float>&, const std::vector<float>&)> distance_fn) {
     if (!enabled_) return;
     
-    auto it = key_to_queries_.find(key);
-    if (it == key_to_queries_.end()) return;
+    // Use interval tree for efficient O(log N) lookup instead of O(N) linear search
+    std::vector<std::string> queries_to_check;
+    find_overlapping_intervals(interval_root_.get(), key, queries_to_check);
     
-    std::vector<std::string> queries_to_check(it->second.begin(), it->second.end());
+    if (queries_to_check.empty()) return;
     
+    bool any_removed = false;
     for (const auto& query_id : queries_to_check) {
         CachedQueryResult result;
         if (!load_query_result(query_id, result)) continue;
@@ -150,9 +155,13 @@ void QueryCache::invalidate_if_affected(int key, const std::vector<float>& new_v
         if (new_dist < farthest_dist) {
             remove_from_inverted_index(query_id);
             delete_query_result(query_id);
+            any_removed = true;
         }
     }
-    save_inverted_index();
+    
+    if (any_removed) {
+        save_inverted_index();
+    }
 }
 
 void QueryCache::load_config(const std::string& config_path) {
@@ -277,36 +286,26 @@ void QueryCache::delete_query_result(const std::string& query_id) {
 }
 
 void QueryCache::add_to_inverted_index(const std::string& query_id, int min_key, int max_key) {
-    std::unordered_set<int> keys;
-    for (int k = min_key; k <= max_key; k++) {
-        keys.insert(k);
-        key_to_queries_[k].insert(query_id);
-    }
-    query_to_keys_[query_id] = keys;
+    // Store only range bounds - O(1) instead of O(N) where N = range size
+    query_ranges_[query_id] = {min_key, max_key};
+    
+    // Add to interval tree for efficient lookups
+    insert_interval(interval_root_, min_key, max_key, query_id);
 }
 
 void QueryCache::remove_from_inverted_index(const std::string& query_id) {
-    auto it = query_to_keys_.find(query_id);
-    if (it == query_to_keys_.end()) return;
+    // Remove from interval tree
+    remove_interval(interval_root_, query_id);
     
-    for (int key : it->second) {
-        auto kit = key_to_queries_.find(key);
-        if (kit != key_to_queries_.end()) {
-            kit->second.erase(query_id);
-            if (kit->second.empty()) {
-                key_to_queries_.erase(kit);
-            }
-        }
-    }
-    query_to_keys_.erase(it);
+    query_ranges_.erase(query_id);
 }
 
 void QueryCache::load_inverted_index() {
     std::ifstream file(inverted_index_path_, std::ios::binary);
     if (!file.is_open()) return;
     
-    key_to_queries_.clear();
-    query_to_keys_.clear();
+    query_ranges_.clear();
+    interval_root_.reset();  // Clear interval tree
     
     uint32_t num_queries;
     file.read(reinterpret_cast<char*>(&num_queries), sizeof(num_queries));
@@ -317,17 +316,13 @@ void QueryCache::load_inverted_index() {
         std::string query_id(id_len, '\0');
         file.read(&query_id[0], id_len);
         
-        uint32_t num_keys;
-        file.read(reinterpret_cast<char*>(&num_keys), sizeof(num_keys));
+        int min_key, max_key;
+        file.read(reinterpret_cast<char*>(&min_key), sizeof(min_key));
+        file.read(reinterpret_cast<char*>(&max_key), sizeof(max_key));
         
-        std::unordered_set<int> keys;
-        for (uint32_t j = 0; j < num_keys; j++) {
-            int key;
-            file.read(reinterpret_cast<char*>(&key), sizeof(key));
-            keys.insert(key);
-            key_to_queries_[key].insert(query_id);
-        }
-        query_to_keys_[query_id] = keys;
+        query_ranges_[query_id] = {min_key, max_key};
+        // Rebuild interval tree
+        insert_interval(interval_root_, min_key, max_key, query_id);
     }
 }
 
@@ -335,21 +330,19 @@ void QueryCache::save_inverted_index() {
     std::ofstream file(inverted_index_path_, std::ios::binary);
     if (!file.is_open()) return;
     
-    uint32_t num_queries = static_cast<uint32_t>(query_to_keys_.size());
+    uint32_t num_queries = static_cast<uint32_t>(query_ranges_.size());
     file.write(reinterpret_cast<const char*>(&num_queries), sizeof(num_queries));
     
-    for (const auto& [query_id, keys] : query_to_keys_) {
+    for (const auto& [query_id, range] : query_ranges_) {
         uint32_t id_len = static_cast<uint32_t>(query_id.size());
         file.write(reinterpret_cast<const char*>(&id_len), sizeof(id_len));
         file.write(query_id.data(), id_len);
         
-        uint32_t num_keys = static_cast<uint32_t>(keys.size());
-        file.write(reinterpret_cast<const char*>(&num_keys), sizeof(num_keys));
-        
-        for (int key : keys) {
-            file.write(reinterpret_cast<const char*>(&key), sizeof(key));
-        }
+        file.write(reinterpret_cast<const char*>(&range.min_key), sizeof(range.min_key));
+        file.write(reinterpret_cast<const char*>(&range.max_key), sizeof(range.max_key));
     }
+    
+    // Note: Interval tree is rebuilt from query_ranges_ on load, so no need to persist it separately
 }
 
 size_t QueryCache::get_cache_size() const {
@@ -365,7 +358,7 @@ size_t QueryCache::get_cache_size() const {
 std::vector<std::pair<std::string, std::time_t>> QueryCache::get_queries_by_last_used() const {
     std::vector<std::pair<std::string, std::time_t>> result;
     
-    for (const auto& [query_id, _] : query_to_keys_) {
+    for (const auto& [query_id, _] : query_ranges_) {
         CachedQueryResult cached;
         if (load_query_result(query_id, cached)) {
             result.push_back({query_id, cached.last_used_date});
@@ -373,4 +366,108 @@ std::vector<std::pair<std::string, std::time_t>> QueryCache::get_queries_by_last
     }
     
     return result;
+}
+
+// Public API for B+ tree operations: efficiently find all queries containing a key
+std::vector<std::string> QueryCache::get_queries_containing_key(int key) const {
+    std::vector<std::string> result;
+    if (!enabled_) return result;
+    
+    find_overlapping_intervals(interval_root_.get(), key, result);
+    return result;
+}
+
+// Interval tree implementation for efficient range queries
+void QueryCache::insert_interval(std::unique_ptr<IntervalNode>& node, int start, int end, const std::string& query_id) {
+    if (!node) {
+        node = std::make_unique<IntervalNode>(start, end, query_id);
+        return;
+    }
+    
+    // Update max_end for this subtree
+    if (end > node->max_end) {
+        node->max_end = end;
+    }
+    
+    // Insert based on start value (BST property)
+    if (start < node->start) {
+        insert_interval(node->left, start, end, query_id);
+    } else {
+        insert_interval(node->right, start, end, query_id);
+    }
+    
+    // Update max_end after insertion
+    update_max_end(node.get());
+}
+
+void QueryCache::remove_interval(std::unique_ptr<IntervalNode>& node, const std::string& query_id) {
+    if (!node) return;
+    
+    if (node->query_id == query_id) {
+        // Found the node to remove
+        if (!node->left && !node->right) {
+            // Leaf node
+            node.reset();
+        } else if (!node->left) {
+            // Only right child
+            node = std::move(node->right);
+        } else if (!node->right) {
+            // Only left child
+            node = std::move(node->left);
+        } else {
+            // Two children - find inorder successor
+            IntervalNode* successor = node->right.get();
+            while (successor->left) {
+                successor = successor->left.get();
+            }
+            
+            // Replace current node's data with successor's data
+            node->start = successor->start;
+            node->end = successor->end;
+            node->query_id = successor->query_id;
+            
+            // Remove successor
+            remove_interval(node->right, successor->query_id);
+        }
+    } else {
+        // Recursively search in subtrees
+        remove_interval(node->left, query_id);
+        remove_interval(node->right, query_id);
+    }
+    
+    // Update max_end after removal
+    if (node) {
+        update_max_end(node.get());
+    }
+}
+
+void QueryCache::find_overlapping_intervals(const IntervalNode* node, int key, std::vector<std::string>& result) const {
+    if (!node) return;
+    
+    // Check if current interval contains the key
+    if (key >= node->start && key <= node->end) {
+        result.push_back(node->query_id);
+    }
+    
+    // If left subtree exists and its max_end >= key, search left
+    if (node->left && node->left->max_end >= key) {
+        find_overlapping_intervals(node->left.get(), key, result);
+    }
+    
+    // If current node's start <= key, search right subtree
+    if (node->start <= key && node->right) {
+        find_overlapping_intervals(node->right.get(), key, result);
+    }
+}
+
+void QueryCache::update_max_end(IntervalNode* node) {
+    if (!node) return;
+    
+    node->max_end = node->end;
+    if (node->left && node->left->max_end > node->max_end) {
+        node->max_end = node->left->max_end;
+    }
+    if (node->right && node->right->max_end > node->max_end) {
+        node->max_end = node->right->max_end;
+    }
 }

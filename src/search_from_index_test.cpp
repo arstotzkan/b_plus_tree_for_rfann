@@ -2,6 +2,7 @@
 #include "DataObject.h"
 #include "index_directory.h"
 #include "query_cache.h"
+#include "logger.h"
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -99,11 +100,16 @@ void print_usage(const char* program_name) {
     std::cout << "  --groundtruth    Path to groundtruth file (.ivecs format)" << std::endl;
     std::cout << "  --num-queries    Number of queries to run (default: all)" << std::endl;
     std::cout << "  --no-cache       Disable query caching" << std::endl;
+    std::cout << "  --parallel       Enable parallel KNN search (auto-detects optimal thread count)" << std::endl;
+    std::cout << "  --threads        Number of threads for parallel search (0 = auto, default)" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  Batch RFANN test:" << std::endl;
     std::cout << "    " << program_name << " --index data/sift_index --queries data/dataset/siftsmall_query.fvecs \\" << std::endl;
     std::cout << "      --groundtruth data/dataset/siftsmall_groundtruth.ivecs" << std::endl;
+    std::cout << "  Parallel RFANN test:" << std::endl;
+    std::cout << "    " << program_name << " --index data/sift_index --queries data/dataset/siftsmall_query.fvecs \\" << std::endl;
+    std::cout << "      --groundtruth data/dataset/siftsmall_groundtruth.ivecs --parallel" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -115,6 +121,8 @@ int main(int argc, char* argv[]) {
     bool has_queries = false;
     bool has_groundtruth = false;
     bool cache_enabled = true;
+    bool use_parallel = false;
+    int num_threads = 0;  // 0 = auto-detect
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
@@ -133,6 +141,11 @@ int main(int argc, char* argv[]) {
             num_queries = std::atoi(argv[++i]);
         } else if (arg == "--no-cache") {
             cache_enabled = false;
+        } else if (arg == "--parallel") {
+            use_parallel = true;
+        } else if (arg == "--threads" && i + 1 < argc) {
+            num_threads = std::atoi(argv[++i]);
+            use_parallel = true;  // Implicitly enable parallel if threads specified
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -156,6 +169,10 @@ int main(int argc, char* argv[]) {
     std::cout << "Index file: " << idx_dir.get_index_file_path() << std::endl;
     std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
 
+    // Initialize logging
+    Logger::init(index_dir, "search_test");
+    Logger::set_log_level(LogLevel::DEBUG);
+
     DiskBPlusTree dataTree(idx_dir.get_index_file_path());
     QueryCache cache(idx_dir.get_base_dir(), cache_enabled);
     
@@ -163,11 +180,20 @@ int main(int argc, char* argv[]) {
         cache.load_config(idx_dir.get_config_file_path());
     }
 
+    // Log test configuration
+    std::ostringstream config_log;
+    config_log << "Search test configuration | Cache: " << (cache_enabled ? "enabled" : "disabled")
+               << " | Parallel: " << (use_parallel ? "enabled" : "disabled");
+    if (use_parallel) config_log << " | Threads: " << num_threads;
+    if (has_queries) config_log << " | Query file provided: yes";
+    Logger::log_config(config_log.str());
+
     auto [min_key, max_key] = dataTree.get_key_range();
     if (max_key < min_key) {
         std::cerr << "Error: Tree appears empty" << std::endl;
         return 1;
     }
+    std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled") << std::endl;
     std::cout << "Range filter (from tree): [" << min_key << ", " << max_key << "]" << std::endl;
 
     // If no queries file provided, run simple tests
@@ -257,52 +283,44 @@ int main(int argc, char* argv[]) {
             }
             cache_hits++;
         } else {
-            // Range search
-            auto range_start = std::chrono::high_resolution_clock::now();
-            std::vector<DataObject*> range_results = dataTree.search_range(min_key, max_key);
-            auto range_end = std::chrono::high_resolution_clock::now();
-            total_range_time += std::chrono::duration_cast<std::chrono::microseconds>(range_end - range_start).count();
+            // Optimized KNN search (parallel or single-threaded)
+            auto knn_start = std::chrono::high_resolution_clock::now();
+            std::vector<DataObject*> knn_results;
+            if (use_parallel) {
+                knn_results = dataTree.search_knn_parallel(query_vec, min_key, max_key, k_neighbors, num_threads);
+            } else {
+                knn_results = dataTree.search_knn_optimized(query_vec, min_key, max_key, k_neighbors);
+            }
+            auto knn_end = std::chrono::high_resolution_clock::now();
+            auto query_duration = std::chrono::duration_cast<std::chrono::microseconds>(knn_end - knn_start).count();
+            total_range_time += query_duration;
 
-            if (range_results.empty()) {
+            // Log individual query performance
+            std::ostringstream query_params;
+            query_params << "Query #" << (q + 1) << " | K=" << k_neighbors << " | Range=[" << min_key << "," << max_key << "]";
+            Logger::log_query("KNN", query_params.str(), query_duration / 1000.0, knn_results.size());
+
+            if (knn_results.empty()) {
                 continue;
             }
 
-            // KNN within range
-            auto knn_start = std::chrono::high_resolution_clock::now();
-            std::vector<std::pair<double, int>> distances;
-            for (DataObject* obj : range_results) {
-                double dist = calculate_distance(query_vec, obj->get_vector());
-                int key = obj->is_int_value() ? obj->get_int_value() : static_cast<int>(obj->get_float_value());
-                distances.push_back({dist, key});
-            }
-
-            std::sort(distances.begin(), distances.end(),
-                [](const auto& a, const auto& b) { return a.first < b.first; });
-
-            // Get top-K and prepare cache data
+            // Results are already sorted by distance, prepare cache data
             std::vector<std::pair<std::vector<float>, int>> results_for_cache;
-            if (has_groundtruth) {
-                for (int i = 0; i < std::min(k_neighbors, static_cast<int>(distances.size())); i++) {
-                    retrieved.push_back(distances[i].second);
-                    for (DataObject* obj : range_results) {
-                        int obj_key = obj->is_int_value() ? obj->get_int_value() : static_cast<int>(obj->get_float_value());
-                        if (obj_key == distances[i].second) {
-                            results_for_cache.push_back({obj->get_vector(), obj_key});
-                            break;
-                        }
-                    }
-                }
+            for (size_t i = 0; i < knn_results.size(); i++) {
+                int key = knn_results[i]->is_int_value() ? 
+                    knn_results[i]->get_int_value() : 
+                    static_cast<int>(knn_results[i]->get_float_value());
+                retrieved.push_back(key);
+                results_for_cache.push_back({knn_results[i]->get_vector(), key});
             }
-            auto knn_end = std::chrono::high_resolution_clock::now();
-            total_knn_time += std::chrono::duration_cast<std::chrono::microseconds>(knn_end - knn_start).count();
 
             // Store in cache
-            if (cache_enabled && has_groundtruth && !results_for_cache.empty()) {
+            if (cache_enabled && !results_for_cache.empty()) {
                 cache.store_result(query_hash, query_vec, min_key, max_key, k_neighbors, results_for_cache);
             }
 
             // Clean up
-            for (DataObject* obj : range_results) {
+            for (DataObject* obj : knn_results) {
                 delete obj;
             }
         }
@@ -329,9 +347,17 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "Average range search time: " << (total_range_time / queries_to_run) << " us" << std::endl;
     std::cout << "Average KNN time: " << (total_knn_time / queries_to_run) << " us" << std::endl;
-    std::cout << "Average total query time: " << ((total_range_time + total_knn_time) / queries_to_run) << " us" << std::endl;
-    std::cout << "Total time: " << ((total_range_time + total_knn_time) / 1000.0) << " ms" << std::endl;
+    std::cout << "Average total query time: " << (total_range_time / queries_to_run) << " us" << std::endl;
+    std::cout << "Total time: " << (total_range_time / 1000.0) << " ms" << std::endl;
     std::cout << "Queries per second: " << (queries_to_run * 1000000.0 / (total_range_time + total_knn_time)) << std::endl;
+
+    // Log batch performance summary
+    std::ostringstream batch_summary;
+    batch_summary << "Batch test completed | Total queries: " << queries_to_run
+                  << " | Cache hits: " << cache_hits << " (" << (cache_hits * 100.0 / queries_to_run) << "%)"
+                  << " | Avg query time: " << (total_range_time / queries_to_run) << " μs"
+                  << " | QPS: " << (queries_to_run * 1000000.0 / (total_range_time + total_knn_time));
+    Logger::log_performance("BATCH_TEST", total_range_time / 1000.0, batch_summary.str());
 
     if (has_groundtruth && valid_queries > 0) {
         std::cout << std::endl << "=== Recall ===" << std::endl;

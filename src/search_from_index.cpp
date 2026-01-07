@@ -2,6 +2,7 @@
 #include "DataObject.h"
 #include "index_directory.h"
 #include "query_cache.h"
+#include "logger.h"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -45,6 +46,8 @@ void print_usage(const char* program_name) {
     std::cout << "  --K, -k       Number of nearest neighbors to return (requires --vector)" << std::endl;
     std::cout << "  --limit       Maximum number of results to return (for memory efficiency)" << std::endl;
     std::cout << "  --no-cache    Disable query caching" << std::endl;
+    std::cout << "  --parallel    Enable parallel KNN search (auto-detects optimal thread count)" << std::endl;
+    std::cout << "  --threads     Number of threads for parallel search (0 = auto, default)" << std::endl;
     std::cout << std::endl;
     std::cout << "Note: --value and --min/--max are mutually exclusive" << std::endl;
     std::cout << std::endl;
@@ -53,6 +56,7 @@ void print_usage(const char* program_name) {
     std::cout << "  Value search:      " << program_name << " --index data/my_index --value 42" << std::endl;
     std::cout << "  KNN in range:      " << program_name << " --index data/my_index --min 20 --max 80 --vector 10,20,30 --K 5" << std::endl;
     std::cout << "  KNN at value:      " << program_name << " --index data/my_index --value 42 --vector 10,20,30 --K 5" << std::endl;
+    std::cout << "  Parallel KNN:      " << program_name << " --index data/my_index --min 0 --max 10000 --vector 1,2,3 --K 10 --parallel" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -61,6 +65,8 @@ int main(int argc, char* argv[]) {
     int max_key = -1;
     int search_value = -1;
     std::vector<float> query_vector;
+    bool use_parallel = false;
+    int num_threads = 0;  // 0 = auto-detect
     int k_neighbors = -1;
     int result_limit = -1;  // -1 means no limit
     bool has_index = false;
@@ -97,6 +103,11 @@ int main(int argc, char* argv[]) {
             result_limit = std::atoi(argv[++i]);
         } else if (arg == "--no-cache") {
             cache_enabled = false;
+        } else if (arg == "--parallel") {
+            use_parallel = true;
+        } else if (arg == "--threads" && i + 1 < argc) {
+            num_threads = std::atoi(argv[++i]);
+            use_parallel = true;  // Implicitly enable parallel if threads specified
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -145,12 +156,23 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Initialize logging
+    Logger::init(index_dir, "query");
+    Logger::set_log_level(LogLevel::DEBUG);
+
     DiskBPlusTree dataTree(idx_dir.get_index_file_path());
     QueryCache cache(idx_dir.get_base_dir(), cache_enabled);
     
     if (cache_enabled) {
         cache.load_config(idx_dir.get_config_file_path());
     }
+
+    // Log query configuration
+    std::ostringstream config_log;
+    config_log << "Query configuration | Cache: " << (cache_enabled ? "enabled" : "disabled")
+               << " | Parallel: " << (use_parallel ? "enabled" : "disabled");
+    if (use_parallel) config_log << " | Threads: " << num_threads;
+    Logger::log_config(config_log.str());
 
     // Start timing
     auto query_start = std::chrono::high_resolution_clock::now();
@@ -163,15 +185,39 @@ int main(int argc, char* argv[]) {
         std::cout << "=== B+ Tree Value Search ===" << std::endl;
         std::cout << "Index directory: " << index_dir << std::endl;
         std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
+        std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled") << std::endl;
         std::cout << "Search value: " << search_value << std::endl;
-        results = dataTree.search_range(search_value, search_value);
+        
+        if (has_vector && has_k) {
+            // Use optimized KNN search for value queries with vector
+            if (use_parallel) {
+                results = dataTree.search_knn_parallel(query_vector, search_value, search_value, k_neighbors, num_threads);
+            } else {
+                results = dataTree.search_knn_optimized(query_vector, search_value, search_value, k_neighbors);
+            }
+        } else {
+            // Regular value search without KNN
+            results = dataTree.search_range(search_value, search_value);
+        }
     } else {
         // Range search
         std::cout << "=== B+ Tree Range Search ===" << std::endl;
         std::cout << "Index directory: " << index_dir << std::endl;
         std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
+        std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled") << std::endl;
         std::cout << "Range: [" << min_key << ", " << max_key << "]" << std::endl;
-        results = dataTree.search_range(min_key, max_key);
+        
+        if (has_vector && has_k) {
+            // Use optimized KNN search for range queries with vector
+            if (use_parallel) {
+                results = dataTree.search_knn_parallel(query_vector, min_key, max_key, k_neighbors, num_threads);
+            } else {
+                results = dataTree.search_knn_optimized(query_vector, min_key, max_key, k_neighbors);
+            }
+        } else {
+            // Regular range search without KNN
+            results = dataTree.search_range(min_key, max_key);
+        }
     }
 
     auto range_end = std::chrono::high_resolution_clock::now();
@@ -221,30 +267,19 @@ int main(int argc, char* argv[]) {
         }
         
         if (!cache_hit) {
-            // KNN search: sort results by distance to query vector
-            std::vector<std::pair<double, DataObject*>> distances;
-            for (DataObject* obj : results) {
-                double dist = calculate_distance(query_vector, obj->get_vector());
-                distances.push_back({dist, obj});
-            }
-
-            // Sort by distance
-            std::sort(distances.begin(), distances.end(), 
-                [](const auto& a, const auto& b) { return a.first < b.first; });
-
-            // Output K nearest neighbors and prepare cache data
-            int output_count = std::min(k_neighbors, static_cast<int>(distances.size()));
-            std::cout << "Found " << results.size() << " objects, showing " << output_count << " nearest neighbors:" << std::endl;
+            // Results are already sorted by distance from optimized KNN search
+            std::cout << "Found and sorted " << results.size() << " nearest neighbors:" << std::endl;
             
             std::vector<std::pair<std::vector<float>, int>> results_for_cache;
-            for (int i = 0; i < output_count; i++) {
-                std::cout << "  #" << (i+1) << " (dist=" << distances[i].first << "): ";
-                distances[i].second->print();
+            for (size_t i = 0; i < results.size(); i++) {
+                double dist = calculate_distance(query_vector, results[i]->get_vector());
+                std::cout << "  #" << (i+1) << " (dist=" << dist << "): ";
+                results[i]->print();
                 
-                int obj_key = distances[i].second->is_int_value() ? 
-                    distances[i].second->get_int_value() : 
-                    static_cast<int>(distances[i].second->get_float_value());
-                results_for_cache.push_back({distances[i].second->get_vector(), obj_key});
+                int obj_key = results[i]->is_int_value() ? 
+                    results[i]->get_int_value() : 
+                    static_cast<int>(results[i]->get_float_value());
+                results_for_cache.push_back({results[i]->get_vector(), obj_key});
             }
 
             // Store in cache
@@ -254,15 +289,20 @@ int main(int argc, char* argv[]) {
             }
 
             // Clean up all results
-            for (auto& pair : distances) {
-                delete pair.second;
+            for (DataObject* obj : results) {
+                delete obj;
             }
 
             auto knn_end = std::chrono::high_resolution_clock::now();
             auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(knn_end - query_start);
             std::cout << std::endl << "Query execution time:" << std::endl;
-            std::cout << "  Range search: " << range_duration.count() << " us" << std::endl;
-            std::cout << "  Total (with KNN): " << total_duration.count() << " us" << std::endl;
+            std::cout << "  Optimized KNN search: " << range_duration.count() << " us" << std::endl;
+            
+            // Log query performance
+            std::ostringstream query_params;
+            query_params << "KNN search | K=" << k_neighbors << " | Range=[" << cache_min << "," << cache_max << "]";
+            Logger::log_query("KNN", query_params.str(), total_duration.count() / 1000.0, results.size());
+            std::cout << "  Total: " << total_duration.count() << " us" << std::endl;
         }
     } else {
         // Regular search output
