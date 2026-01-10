@@ -92,7 +92,7 @@ int main(int argc, char* argv[]) {
     BPTreeConfig config(order, static_cast<uint32_t>(vector_dimension));
 
     // Initialize logging
-    Logger::init(index_dir, "synthetic_build");
+    Logger::init(index_dir, "index");
     Logger::set_log_level(LogLevel::INFO);
 
     // Initialize random number generator

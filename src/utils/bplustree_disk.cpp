@@ -1156,7 +1156,7 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
     auto traversal_time = std::chrono::duration_cast<std::chrono::microseconds>(traversal_end - traversal_start).count();
     Logger::debug("Tree traversal completed: " + std::to_string(tree_reads) + " node reads, " + std::to_string(traversal_time) + " μs");
     
-    // Traverse leaves and maintain K best candidates
+    // Traverse leaves and maintain K best candidates with read-ahead and batch I/O
     auto leaf_scan_start = std::chrono::high_resolution_clock::now();
     uint32_t currentPid = pid;
     int leaf_reads = 0;
@@ -1164,6 +1164,7 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
     long long vector_reconstruction_time = 0;
     long long distance_calculation_time = 0;
     long long heap_operation_time = 0;
+    long long readahead_time = 0;
     
     // Progress tracking
     int range_size = max_key - min_key + 1;
@@ -1171,10 +1172,32 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
     int last_progress_percent = -1;
     auto last_progress_time = leaf_scan_start;
     
-    while (currentPid != INVALID_PAGE) {
-        BPlusNode leaf;
-        read(currentPid, leaf);
+    // Read-ahead buffer: prefetch next leaves while processing current one
+    const int READAHEAD_SIZE = 3;  // Prefetch 3 leaves ahead
+    std::vector<BPlusNode> readahead_buffer;
+    std::vector<uint32_t> readahead_pids;
+    
+    // Initial batch read: load first leaf + readahead leaves
+    auto batch_read_start = std::chrono::high_resolution_clock::now();
+    BPlusNode current_leaf;
+    read(currentPid, current_leaf);
+    leaf_reads++;
+    
+    // Batch read next READAHEAD_SIZE leaves
+    uint32_t next_pid = current_leaf.next;
+    for (int i = 0; i < READAHEAD_SIZE && next_pid != INVALID_PAGE; i++) {
+        BPlusNode ahead_leaf;
+        read(next_pid, ahead_leaf);
         leaf_reads++;
+        readahead_buffer.push_back(ahead_leaf);
+        readahead_pids.push_back(next_pid);
+        next_pid = ahead_leaf.next;
+    }
+    auto batch_read_end = std::chrono::high_resolution_clock::now();
+    readahead_time += std::chrono::duration_cast<std::chrono::microseconds>(batch_read_end - batch_read_start).count();
+    
+    while (currentPid != INVALID_PAGE) {
+        BPlusNode leaf = current_leaf;
                 
         for (int i = 0; i < leaf.keyCount; i++) {
             if (leaf.keys[i] >= min_key && leaf.keys[i] <= max_key) {
@@ -1249,13 +1272,36 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
             }
         }
         
-        uint32_t nextPid = leaf.next;
-        
-        if (nextPid == currentPid) {
-            break;  // Circular reference protection
+        // Move to next leaf using read-ahead buffer
+        if (!readahead_buffer.empty()) {
+            // Use prefetched leaf from buffer
+            current_leaf = readahead_buffer.front();
+            readahead_buffer.erase(readahead_buffer.begin());
+            readahead_pids.erase(readahead_pids.begin());
+            currentPid = readahead_pids.empty() ? INVALID_PAGE : readahead_pids.front();
+            
+            // Refill read-ahead buffer if needed
+            if (!readahead_buffer.empty()) {
+                uint32_t last_pid = readahead_pids.back();
+                BPlusNode last_leaf = readahead_buffer.back();
+                next_pid = last_leaf.next;
+                
+                auto refill_start = std::chrono::high_resolution_clock::now();
+                while (readahead_buffer.size() < READAHEAD_SIZE && next_pid != INVALID_PAGE) {
+                    BPlusNode ahead_leaf;
+                    read(next_pid, ahead_leaf);
+                    leaf_reads++;
+                    readahead_buffer.push_back(ahead_leaf);
+                    readahead_pids.push_back(next_pid);
+                    next_pid = ahead_leaf.next;
+                }
+                auto refill_end = std::chrono::high_resolution_clock::now();
+                readahead_time += std::chrono::duration_cast<std::chrono::microseconds>(refill_end - refill_start).count();
+            }
+        } else {
+            // No more prefetched leaves
+            currentPid = INVALID_PAGE;
         }
-        
-        currentPid = nextPid;
     }
     
 extract_results:
@@ -1266,6 +1312,8 @@ extract_results:
     Logger::debug("Leaf scanning completed: " + std::to_string(leaf_reads) + " leaf reads, " + 
                   std::to_string(vectors_processed) + " vectors processed, " + 
                   std::to_string(leaf_scan_time) + " μs total");
+    Logger::debug("  - Read-ahead I/O: " + std::to_string(readahead_time) + " μs (" + 
+                  std::to_string(readahead_time * 100.0 / leaf_scan_time) + "%)");
     Logger::debug("  - Vector reconstruction: " + std::to_string(vector_reconstruction_time) + " μs (" + 
                   std::to_string(vector_reconstruction_time * 100.0 / leaf_scan_time) + "%)");
     Logger::debug("  - Distance calculation: " + std::to_string(distance_calculation_time) + " μs (" + 
