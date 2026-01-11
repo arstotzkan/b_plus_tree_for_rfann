@@ -22,23 +22,23 @@ struct BPTreeConfig {
     
     // Calculate the minimum page size needed for a BPlusNode with this config
     size_t calculate_node_size() const {
-        // BPlusNode layout:
+        // BPlusNode layout (with separate vector storage):
         // - isLeaf: 1 byte (padded to 4)
         // - keyCount: 2 bytes (padded to 4)  
         // - keys[order]: order * 4 bytes
         // - children[order+1]: (order+1) * 4 bytes
         // - next: 4 bytes
         // - vector_sizes[order]: order * 4 bytes
-        // - data_vectors[order][max_vector_size]: order * max_vector_size * 4 bytes
+        // - vector_ids[order]: order * 8 bytes (references to separate storage)
         
         size_t fixed_overhead = 4 + 4;  // isLeaf + keyCount (with padding)
         size_t keys_size = order * sizeof(int);
         size_t children_size = (order + 1) * sizeof(uint32_t);
         size_t next_size = sizeof(uint32_t);
         size_t vector_sizes_size = order * sizeof(int);
-        size_t vectors_size = order * max_vector_size * sizeof(float);
+        size_t vector_ids_size = order * sizeof(uint64_t);
         
-        return fixed_overhead + keys_size + children_size + next_size + vector_sizes_size + vectors_size;
+        return fixed_overhead + keys_size + children_size + next_size + vector_sizes_size + vector_ids_size;
     }
     
     uint32_t calculate_min_page_size() const {

@@ -3,8 +3,10 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <memory>
 #include "node.h"
 #include "bptree_config.h"
+#include "vector_store.h"
 
 class PageManager {
 public:
@@ -36,12 +38,16 @@ public:
     
     // Save header to disk
     void saveHeader();
+    
+    // Vector store access
+    VectorStore* getVectorStore() { return vector_store_.get(); }
 
 private:
     std::fstream file_;
     std::string filename_;
     IndexFileHeader header_;
     std::vector<char> page_buffer_;  // Reusable buffer for serialization
+    std::unique_ptr<VectorStore> vector_store_;
     
     void initNewFile(const BPTreeConfig& config);
     void loadExistingFile();

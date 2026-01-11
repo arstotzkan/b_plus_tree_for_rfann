@@ -36,9 +36,9 @@ struct BPlusNode {
     std::vector<uint32_t> children;
     uint32_t next;
     
-    // For DataObject storage in leaf nodes
+    // For DataObject storage in leaf nodes - now stores vector IDs instead of vectors
     std::vector<int> vector_sizes;
-    std::vector<std::vector<float>> data_vectors;
+    std::vector<uint64_t> vector_ids;  // IDs pointing to vectors in separate storage
     
     // Initialize with given order and max vector size
     void init(uint32_t order, uint32_t max_vec_size) {
@@ -48,10 +48,7 @@ struct BPlusNode {
         keys.resize(order, 0);
         children.resize(order + 1, INVALID_PAGE);
         vector_sizes.resize(order, 0);
-        data_vectors.resize(order);
-        for (auto& v : data_vectors) {
-            v.resize(max_vec_size, 0.0f);
-        }
+        vector_ids.resize(order, 0);
     }
     
     // Serialize node to raw bytes for disk storage
@@ -93,13 +90,11 @@ struct BPlusNode {
             ptr += sizeof(int);
         }
         
-        // data_vectors[order][max_vector_size]
+        // vector_ids[order] - store IDs pointing to separate vector storage
         for (uint32_t i = 0; i < config.order; i++) {
-            for (uint32_t j = 0; j < config.max_vector_size; j++) {
-                float v = (i < data_vectors.size() && j < data_vectors[i].size()) ? data_vectors[i][j] : 0.0f;
-                std::memcpy(ptr, &v, sizeof(float));
-                ptr += sizeof(float);
-            }
+            uint64_t vid = (i < vector_ids.size()) ? vector_ids[i] : 0;
+            std::memcpy(ptr, &vid, sizeof(uint64_t));
+            ptr += sizeof(uint64_t);
         }
     }
     
@@ -144,12 +139,10 @@ struct BPlusNode {
             ptr += sizeof(int);
         }
         
-        // data_vectors[order][max_vector_size]
+        // vector_ids[order]
         for (uint32_t i = 0; i < config.order; i++) {
-            for (uint32_t j = 0; j < config.max_vector_size; j++) {
-                std::memcpy(&data_vectors[i][j], ptr, sizeof(float));
-                ptr += sizeof(float);
-            }
+            std::memcpy(&vector_ids[i], ptr, sizeof(uint64_t));
+            ptr += sizeof(uint64_t);
         }
     }
 };

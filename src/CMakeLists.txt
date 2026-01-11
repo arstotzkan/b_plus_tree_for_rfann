@@ -34,6 +34,7 @@ set(COMMON_SOURCES
     utils/query_cache.cpp
     utils/index_directory.cpp
     utils/logger.cpp
+    utils/vector_store.cpp
 )
 
 # Build index with synthetic data executable
