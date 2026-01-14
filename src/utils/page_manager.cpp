@@ -106,9 +106,11 @@ void PageManager::initNewFile(const BPTreeConfig& config) {
         throw std::runtime_error("Cannot reopen index file: " + filename_);
     }
     
-    // Initialize vector store
-    std::string vector_store_filename = filename_ + ".vectors";
-    vector_store_ = std::make_unique<VectorStore>(vector_store_filename, config.max_vector_size);
+    // Initialize vector store only if separate storage is enabled
+    if (config.use_separate_storage) {
+        std::string vector_store_filename = filename_ + ".vectors";
+        vector_store_ = std::make_unique<VectorStore>(vector_store_filename, config.max_vector_size);
+    }
 }
 
 void PageManager::loadExistingFile() {
@@ -131,9 +133,11 @@ void PageManager::loadExistingFile() {
         header_.total_entries = 0;
     }
     
-    // Initialize vector store
-    std::string vector_store_filename = filename_ + ".vectors";
-    vector_store_ = std::make_unique<VectorStore>(vector_store_filename, header_.config.max_vector_size);
+    // Initialize vector store only if separate storage is enabled
+    if (header_.config.use_separate_storage) {
+        std::string vector_store_filename = filename_ + ".vectors";
+        vector_store_ = std::make_unique<VectorStore>(vector_store_filename, header_.config.max_vector_size);
+    }
 }
 
 void PageManager::saveHeader() {

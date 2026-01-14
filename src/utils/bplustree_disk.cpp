@@ -39,10 +39,19 @@ void DiskBPlusTree::splitLeaf(uint32_t leafPid, BPlusNode& leaf, int& promotedKe
     int mid = leaf.keyCount / 2;
     newLeaf.keyCount = leaf.keyCount - mid;
 
+    uint32_t maxVecSize = pm->getMaxVectorSize();
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
+    
     for (int i = 0; i < newLeaf.keyCount; i++) {
         newLeaf.keys[i] = leaf.keys[mid + i];
         newLeaf.vector_sizes[i] = leaf.vector_sizes[mid + i];
-        newLeaf.vector_ids[i] = leaf.vector_ids[mid + i];
+        if (useSeparateStorage) {
+            newLeaf.vector_ids[i] = leaf.vector_ids[mid + i];
+        } else {
+            for (int j = 0; j < leaf.vector_sizes[mid + i] && j < static_cast<int>(maxVecSize); j++) {
+                newLeaf.data_vectors[i][j] = leaf.data_vectors[mid + i][j];
+            }
+        }
     }
 
     leaf.keyCount = mid;
@@ -68,6 +77,9 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
     uint32_t rootPid = pm->getRoot();
     uint32_t order = pm->getOrder();
 
+    uint32_t maxVecSize = pm->getMaxVectorSize();
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
+
     if (rootPid == INVALID_PAGE) {
         // Create first leaf node as root
         BPlusNode root = createNode();
@@ -76,12 +88,18 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
         root.keys[0] = key;
         root.next = INVALID_PAGE;
         
-        // Store vector in separate storage
         const std::vector<float>& vec = obj.get_vector();
         root.vector_sizes[0] = static_cast<int>(vec.size());
-        uint64_t vector_id = pm->getVectorStore()->getNextVectorId();
-        pm->getVectorStore()->storeVector(vector_id, vec, root.vector_sizes[0]);
-        root.vector_ids[0] = vector_id;
+        
+        if (useSeparateStorage) {
+            uint64_t vector_id = pm->getVectorStore()->getNextVectorId();
+            pm->getVectorStore()->storeVector(vector_id, vec, root.vector_sizes[0]);
+            root.vector_ids[0] = vector_id;
+        } else {
+            for (size_t j = 0; j < vec.size() && j < maxVecSize; j++) {
+                root.data_vectors[0][j] = vec[j];
+            }
+        }
 
         uint32_t pid = pm->allocatePage();
         write(pid, root);
@@ -117,16 +135,29 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
     while (i >= 0 && node.keys[i] > key) {
         node.keys[i + 1] = node.keys[i];
         node.vector_sizes[i + 1] = node.vector_sizes[i];
-        node.vector_ids[i + 1] = node.vector_ids[i];
+        if (useSeparateStorage) {
+            node.vector_ids[i + 1] = node.vector_ids[i];
+        } else {
+            for (int j = 0; j < node.vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
+                node.data_vectors[i + 1][j] = node.data_vectors[i][j];
+            }
+        }
         i--;
     }
     node.keys[i + 1] = key;
     
     const std::vector<float>& vec = obj.get_vector();
     node.vector_sizes[i + 1] = static_cast<int>(vec.size());
-    uint64_t vector_id = pm->getVectorStore()->getNextVectorId();
-    pm->getVectorStore()->storeVector(vector_id, vec, node.vector_sizes[i + 1]);
-    node.vector_ids[i + 1] = vector_id;
+    
+    if (useSeparateStorage) {
+        uint64_t vector_id = pm->getVectorStore()->getNextVectorId();
+        pm->getVectorStore()->storeVector(vector_id, vec, node.vector_sizes[i + 1]);
+        node.vector_ids[i + 1] = vector_id;
+    } else {
+        for (size_t j = 0; j < vec.size() && j < maxVecSize; j++) {
+            node.data_vectors[i + 1][j] = vec[j];
+        }
+    }
     
     node.keyCount++;
 
@@ -232,12 +263,21 @@ DataObject* DiskBPlusTree::search_data_object(const DataObject& obj) {
         pid = node.children[i];
     }
     
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
+    uint32_t maxVecSize = pm->getMaxVectorSize();
+    
     for (int i = 0; i < node.keyCount; i++) {
         if (node.keys[i] == key) {
-            // Retrieve vector from separate storage
             std::vector<float> vec;
-            uint32_t actual_size;
-            pm->getVectorStore()->retrieveVector(node.vector_ids[i], vec, actual_size);
+            if (useSeparateStorage) {
+                uint32_t actual_size;
+                pm->getVectorStore()->retrieveVector(node.vector_ids[i], vec, actual_size);
+            } else {
+                vec.resize(node.vector_sizes[i]);
+                for (int j = 0; j < node.vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
+                    vec[j] = node.data_vectors[i][j];
+                }
+            }
             DataObject* result = new DataObject(vec, key);
             return result;
         }
@@ -249,6 +289,9 @@ DataObject* DiskBPlusTree::search_data_object(const DataObject& obj) {
 DataObject* DiskBPlusTree::search_data_object(int key) {
     uint32_t pid = pm->getRoot();
     if (pid == INVALID_PAGE) return nullptr;
+    
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
+    uint32_t maxVecSize = pm->getMaxVectorSize();
     
     BPlusNode node;
     
@@ -272,10 +315,16 @@ DataObject* DiskBPlusTree::search_data_object(int key) {
         
         for (int i = 0; i < leaf.keyCount; i++) {
             if (leaf.keys[i] == key) {
-                // Retrieve vector from separate storage
                 std::vector<float> vec;
-                uint32_t actual_size;
-                pm->getVectorStore()->retrieveVector(leaf.vector_ids[i], vec, actual_size);
+                if (useSeparateStorage) {
+                    uint32_t actual_size;
+                    pm->getVectorStore()->retrieveVector(leaf.vector_ids[i], vec, actual_size);
+                } else {
+                    vec.resize(leaf.vector_sizes[i]);
+                    for (int j = 0; j < leaf.vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
+                        vec[j] = leaf.data_vectors[i][j];
+                    }
+                }
                 DataObject* result = new DataObject(vec, key);
                 return result;
             }
@@ -319,19 +368,26 @@ bool DiskBPlusTree::vectorsMatch(const std::vector<float>& v1, const BPlusNode& 
         return false;
     }
     
-    // Retrieve vector from storage
-    std::vector<float> stored_vec;
-    uint32_t actual_size;
-    try {
-        pm->getVectorStore()->retrieveVector(node.vector_ids[idx], stored_vec, actual_size);
-    } catch (...) {
-        return false;
-    }
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
     
-    for (int j = 0; j < vecSize && j < static_cast<int>(maxVecSize); j++) {
-        // Use larger epsilon for floating point comparison (handles command-line parsing precision)
-        if (std::abs(v1[j] - stored_vec[j]) > 1e-3f) {
+    if (useSeparateStorage) {
+        std::vector<float> stored_vec;
+        uint32_t actual_size;
+        try {
+            pm->getVectorStore()->retrieveVector(node.vector_ids[idx], stored_vec, actual_size);
+        } catch (...) {
             return false;
+        }
+        for (int j = 0; j < vecSize && j < static_cast<int>(maxVecSize); j++) {
+            if (std::abs(v1[j] - stored_vec[j]) > 1e-3f) {
+                return false;
+            }
+        }
+    } else {
+        for (int j = 0; j < vecSize && j < static_cast<int>(maxVecSize); j++) {
+            if (std::abs(v1[j] - node.data_vectors[idx][j]) > 1e-3f) {
+                return false;
+            }
         }
     }
     return true;
@@ -418,10 +474,17 @@ bool DiskBPlusTree::deleteDataObject(int key, const std::vector<float>& vector) 
     
 found:
     // Remove the entry by shifting elements left
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
     for (int i = keyIndex; i < node.keyCount - 1; i++) {
         node.keys[i] = node.keys[i + 1];
         node.vector_sizes[i] = node.vector_sizes[i + 1];
-        node.vector_ids[i] = node.vector_ids[i + 1];
+        if (useSeparateStorage) {
+            node.vector_ids[i] = node.vector_ids[i + 1];
+        } else {
+            for (uint32_t j = 0; j < maxVecSize; j++) {
+                node.data_vectors[i][j] = node.data_vectors[i + 1][j];
+            }
+        }
     }
     node.keyCount--;
     
@@ -607,10 +670,17 @@ bool DiskBPlusTree::deleteKey(int key) {
     int newFirstKey = deletingFirstKey ? node.keys[1] : 0;
     
     // Remove the key by shifting elements left
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
     for (int i = keyIndex; i < node.keyCount - 1; i++) {
         node.keys[i] = node.keys[i + 1];
         node.vector_sizes[i] = node.vector_sizes[i + 1];
-        node.vector_ids[i] = node.vector_ids[i + 1];
+        if (useSeparateStorage) {
+            node.vector_ids[i] = node.vector_ids[i + 1];
+        } else {
+            for (uint32_t j = 0; j < maxVecSize; j++) {
+                node.data_vectors[i][j] = node.data_vectors[i + 1][j];
+            }
+        }
     }
     node.keyCount--;
     
@@ -722,19 +792,33 @@ bool DiskBPlusTree::borrowFromLeftSibling(BPlusNode& parent, int childIdx, BPlus
         return false;
     }
     
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
+    
     if (node.isLeaf) {
         // Shift all keys in current node right
         for (int i = node.keyCount; i > 0; i--) {
             node.keys[i] = node.keys[i - 1];
             node.vector_sizes[i] = node.vector_sizes[i - 1];
-            node.vector_ids[i] = node.vector_ids[i - 1];
+            if (useSeparateStorage) {
+                node.vector_ids[i] = node.vector_ids[i - 1];
+            } else {
+                for (uint32_t j = 0; j < maxVecSize; j++) {
+                    node.data_vectors[i][j] = node.data_vectors[i - 1][j];
+                }
+            }
         }
         
         // Move last key from left sibling to current node
         int lastIdx = leftSibling.keyCount - 1;
         node.keys[0] = leftSibling.keys[lastIdx];
         node.vector_sizes[0] = leftSibling.vector_sizes[lastIdx];
-        node.vector_ids[0] = leftSibling.vector_ids[lastIdx];
+        if (useSeparateStorage) {
+            node.vector_ids[0] = leftSibling.vector_ids[lastIdx];
+        } else {
+            for (uint32_t j = 0; j < maxVecSize; j++) {
+                node.data_vectors[0][j] = leftSibling.data_vectors[lastIdx][j];
+            }
+        }
         node.keyCount++;
         leftSibling.keyCount--;
         
@@ -780,18 +864,32 @@ bool DiskBPlusTree::borrowFromRightSibling(BPlusNode& parent, int childIdx, BPlu
         return false;
     }
     
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
+    
     if (node.isLeaf) {
         // Move first key from right sibling to end of current node
         node.keys[node.keyCount] = rightSibling.keys[0];
         node.vector_sizes[node.keyCount] = rightSibling.vector_sizes[0];
-        node.vector_ids[node.keyCount] = rightSibling.vector_ids[0];
+        if (useSeparateStorage) {
+            node.vector_ids[node.keyCount] = rightSibling.vector_ids[0];
+        } else {
+            for (uint32_t j = 0; j < maxVecSize; j++) {
+                node.data_vectors[node.keyCount][j] = rightSibling.data_vectors[0][j];
+            }
+        }
         node.keyCount++;
         
         // Shift all keys in right sibling left
         for (int i = 0; i < rightSibling.keyCount - 1; i++) {
             rightSibling.keys[i] = rightSibling.keys[i + 1];
             rightSibling.vector_sizes[i] = rightSibling.vector_sizes[i + 1];
-            rightSibling.vector_ids[i] = rightSibling.vector_ids[i + 1];
+            if (useSeparateStorage) {
+                rightSibling.vector_ids[i] = rightSibling.vector_ids[i + 1];
+            } else {
+                for (uint32_t j = 0; j < maxVecSize; j++) {
+                    rightSibling.data_vectors[i][j] = rightSibling.data_vectors[i + 1][j];
+                }
+            }
         }
         rightSibling.keyCount--;
         
@@ -831,12 +929,20 @@ void DiskBPlusTree::mergeWithLeftSibling(BPlusNode& parent, int childIdx, BPlusN
     
     uint32_t maxVecSize = pm->getMaxVectorSize();
     
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
+    
     if (node.isLeaf) {
         // Move all keys from current node to left sibling
         for (int i = 0; i < node.keyCount; i++) {
             leftSibling.keys[leftSibling.keyCount + i] = node.keys[i];
             leftSibling.vector_sizes[leftSibling.keyCount + i] = node.vector_sizes[i];
-            leftSibling.vector_ids[leftSibling.keyCount + i] = node.vector_ids[i];
+            if (useSeparateStorage) {
+                leftSibling.vector_ids[leftSibling.keyCount + i] = node.vector_ids[i];
+            } else {
+                for (uint32_t j = 0; j < maxVecSize; j++) {
+                    leftSibling.data_vectors[leftSibling.keyCount + i][j] = node.data_vectors[i][j];
+                }
+            }
         }
         leftSibling.keyCount += node.keyCount;
         
@@ -876,12 +982,20 @@ void DiskBPlusTree::mergeWithRightSibling(BPlusNode& parent, int childIdx, BPlus
     
     uint32_t maxVecSize = pm->getMaxVectorSize();
     
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
+    
     if (node.isLeaf) {
         // Move all keys from right sibling to current node
         for (int i = 0; i < rightSibling.keyCount; i++) {
             node.keys[node.keyCount + i] = rightSibling.keys[i];
             node.vector_sizes[node.keyCount + i] = rightSibling.vector_sizes[i];
-            node.vector_ids[node.keyCount + i] = rightSibling.vector_ids[i];
+            if (useSeparateStorage) {
+                node.vector_ids[node.keyCount + i] = rightSibling.vector_ids[i];
+            } else {
+                for (uint32_t j = 0; j < maxVecSize; j++) {
+                    node.data_vectors[node.keyCount + i][j] = rightSibling.data_vectors[i][j];
+                }
+            }
         }
         node.keyCount += rightSibling.keyCount;
         
@@ -946,11 +1060,20 @@ std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key) {
         BPlusNode leaf;
         read(currentPid, leaf);
                 
+        bool useSeparateStorage = pm->getConfig().use_separate_storage;
+        
         for (int i = 0; i < leaf.keyCount; i++) {
             if (leaf.keys[i] >= min_key && leaf.keys[i] <= max_key) {
                 std::vector<float> vec;
-                uint32_t actual_size;
-                pm->getVectorStore()->retrieveVector(leaf.vector_ids[i], vec, actual_size);
+                if (useSeparateStorage) {
+                    uint32_t actual_size;
+                    pm->getVectorStore()->retrieveVector(leaf.vector_ids[i], vec, actual_size);
+                } else {
+                    vec.resize(leaf.vector_sizes[i]);
+                    for (int j = 0; j < leaf.vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
+                        vec[j] = leaf.data_vectors[i][j];
+                    }
+                }
                 DataObject* result = new DataObject(vec, leaf.keys[i]);
                 results.push_back(result);
             }
@@ -1020,6 +1143,9 @@ void DiskBPlusTree::print_tree_recursive(uint32_t pid, int level) {
     BPlusNode node;
     read(pid, node);
     
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
+    uint32_t maxVecSize = pm->getMaxVectorSize();
+    
     std::string indent(level * 2, ' ');
     std::cout << indent << "Node " << pid << " (";
     if (node.isLeaf) std::cout << "leaf";
@@ -1030,7 +1156,16 @@ void DiskBPlusTree::print_tree_recursive(uint32_t pid, int level) {
         if (i > 0) std::cout << ", ";
         std::cout << node.keys[i];
         if (node.isLeaf && node.vector_sizes[i] > 0) {
-            std::cout << "(vec_id=" << node.vector_ids[i] << ",size=" << node.vector_sizes[i] << ")";
+            if (useSeparateStorage) {
+                std::cout << "(vec_id=" << node.vector_ids[i] << ",size=" << node.vector_sizes[i] << ")";
+            } else {
+                std::cout << "([";
+                for (int j = 0; j < node.vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
+                    if (j > 0) std::cout << ",";
+                    std::cout << node.data_vectors[i][j];
+                }
+                std::cout << "])";
+            }
         }
     }
     std::cout << "]" << std::endl;
@@ -1208,11 +1343,19 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
                     last_progress_time = current_time;
                 }
                 
-                // Retrieve vector from separate storage
+                // Retrieve vector from storage
                 auto vec_start = std::chrono::high_resolution_clock::now();
                 std::vector<float> vec;
-                uint32_t actual_size;
-                pm->getVectorStore()->retrieveVector(leaf.vector_ids[i], vec, actual_size);
+                bool useSeparateStorage = pm->getConfig().use_separate_storage;
+                if (useSeparateStorage) {
+                    uint32_t actual_size;
+                    pm->getVectorStore()->retrieveVector(leaf.vector_ids[i], vec, actual_size);
+                } else {
+                    vec.resize(leaf.vector_sizes[i]);
+                    for (int j = 0; j < leaf.vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
+                        vec[j] = leaf.data_vectors[i][j];
+                    }
+                }
                 auto vec_end = std::chrono::high_resolution_clock::now();
                 vector_reconstruction_time += std::chrono::duration_cast<std::chrono::microseconds>(vec_end - vec_start).count();
                 
@@ -1446,12 +1589,22 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_parallel(
                 read(currentPid, leaf);
             }
             
+            bool useSeparateStorage = pm->getConfig().use_separate_storage;
+            
             for (int i = 0; i < leaf.keyCount; i++) {
                 if (leaf.keys[i] >= sub_min && leaf.keys[i] <= sub_max) {
-                    // Retrieve vector from separate storage
+                    // Retrieve vector from storage
                     std::vector<float> vec;
-                    uint32_t actual_size;
-                    pm->getVectorStore()->retrieveVector(leaf.vector_ids[i], vec, actual_size);
+                    if (useSeparateStorage) {
+                        uint32_t actual_size;
+                        std::lock_guard<std::mutex> lock(pm_mutex);
+                        pm->getVectorStore()->retrieveVector(leaf.vector_ids[i], vec, actual_size);
+                    } else {
+                        vec.resize(leaf.vector_sizes[i]);
+                        for (int j = 0; j < leaf.vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
+                            vec[j] = leaf.data_vectors[i][j];
+                        }
+                    }
                     
                     double distance = calculate_euclidean_distance(query_vector, vec);
                     

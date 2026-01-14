@@ -14,11 +14,12 @@ void print_usage(const char* program_name) {
     std::cout << "Usage: " << program_name << " --input <fvecs_file> --index <index_dir> [options]" << std::endl;
     std::cout << std::endl;
     std::cout << "Flags:" << std::endl;
-    std::cout << "  --input, -i     Path to the input .fvecs file" << std::endl;
-    std::cout << "  --index, -o     Path to the index directory (will contain index.bpt and .cache/)" << std::endl;
-    std::cout << "  --order         B+ tree order (default: auto-calculated based on vector dimension)" << std::endl;
-    std::cout << "  --batch-size    Number of vectors to process in each batch (default: 10)" << std::endl;
-    std::cout << "  --no-cache      Disable cache creation" << std::endl;
+    std::cout << "  --input, -i              Path to the input .fvecs file" << std::endl;
+    std::cout << "  --index, -o              Path to the index directory (will contain index.bpt and .cache/)" << std::endl;
+    std::cout << "  --order                  B+ tree order (default: auto-calculated based on vector dimension)" << std::endl;
+    std::cout << "  --batch-size             Number of vectors to process in each batch (default: 10)" << std::endl;
+    std::cout << "  --no-cache               Disable cache creation" << std::endl;
+    std::cout << "  --separate-vector-storage  Store vectors in separate file (reduces node size)" << std::endl;
     std::cout << std::endl;
     std::cout << "B+ Tree Configuration:" << std::endl;
     std::cout << "  The index automatically detects vector dimension from the input file and" << std::endl;
@@ -29,7 +30,7 @@ void print_usage(const char* program_name) {
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  " << program_name << " --input data/siftsmall_base.fvecs --index data/sift_index" << std::endl;
-    std::cout << "  " << program_name << " --input data/gist_base.fvecs --index data/gist_index --order 2" << std::endl;
+    std::cout << "  " << program_name << " --input data/sift_base.fvecs --index data/sift_index --separate-vector-storage" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -40,6 +41,7 @@ int main(int argc, char* argv[]) {
     bool has_input = false;
     bool has_index = false;
     bool cache_enabled = true;
+    bool separate_vector_storage = false;
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
@@ -59,6 +61,8 @@ int main(int argc, char* argv[]) {
             if (batch_size <= 0) batch_size = 10;
         } else if (arg == "--no-cache") {
             cache_enabled = false;
+        } else if (arg == "--separate-vector-storage") {
+            separate_vector_storage = true;
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -106,11 +110,13 @@ int main(int argc, char* argv[]) {
     // For large vectors, we may need to reduce order to fit in reasonable page sizes
     // Auto-suggest order if not specified
     if (custom_order == 0) {
-        order = BPTreeConfig::suggest_order(static_cast<uint32_t>(dimension), 16384);
+        order = BPTreeConfig::suggest_order(static_cast<uint32_t>(dimension), 16384, separate_vector_storage ? 1 : 0);
         if (order < 2) order = 2;
     }
     
     BPTreeConfig config(order, static_cast<uint32_t>(dimension));
+    config.use_separate_storage = separate_vector_storage ? 1 : 0;
+    config.page_size = config.calculate_min_page_size();  // Recalculate after setting storage mode
     
     // Initialize logging
     Logger::init(index_dir, "index_build");
