@@ -14,6 +14,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 
 class DiskBPlusTree {
 public:
@@ -27,16 +28,21 @@ public:
     bool delete_data_object(const DataObject& obj);  // Delete specific DataObject (matches key + vector)
     bool delete_data_object(int key);                 // Delete first entry with this key
     bool delete_data_object(float key);               // Delete first entry with this key
-    DataObject* search_data_object(const DataObject& obj);
-    DataObject* search_data_object(int key);
-    DataObject* search_data_object(float key);
-    std::vector<DataObject*> search_range(int min_key, int max_key);
-    std::vector<DataObject*> search_range(float min_key, float max_key);
-    std::vector<DataObject*> search_knn_optimized(const std::vector<float>& query_vector, int min_key, int max_key, int k);
-    std::vector<DataObject*> search_knn_parallel(const std::vector<float>& query_vector, int min_key, int max_key, int k, int num_threads = 0);
-    bool search(const DataObject& obj);
+    DataObject* search_data_object(const DataObject& obj, bool use_memory_index = false);
+    DataObject* search_data_object(int key, bool use_memory_index = false);
+    DataObject* search_data_object(float key, bool use_memory_index = false);
+    std::vector<DataObject*> search_range(int min_key, int max_key, bool use_memory_index = false);
+    std::vector<DataObject*> search_range(float min_key, float max_key, bool use_memory_index = false);
+    std::vector<DataObject*> search_knn_optimized(const std::vector<float>& query_vector, int min_key, int max_key, int k, bool use_memory_index = false);
+    std::vector<DataObject*> search_knn_parallel(const std::vector<float>& query_vector, int min_key, int max_key, int k, int num_threads = 0, bool use_memory_index = false);
+    bool search(const DataObject& obj, bool use_memory_index = false);
     void print_tree();
     std::pair<int, int> get_key_range();
+    
+    // In-memory index loading
+    bool loadIntoMemory();
+    void clearMemoryIndex();
+    bool isMemoryIndexLoaded() const { return memory_index_loaded_; }
     
     // Access configuration
     const BPTreeConfig& getConfig() const { return pm->getConfig(); }
@@ -46,7 +52,13 @@ public:
 private:
     std::unique_ptr<PageManager> pm;
     
+    // In-memory index cache
+    std::unordered_map<uint32_t, BPlusNode> memory_index_;
+    bool memory_index_loaded_ = false;
+    
     void read(uint32_t pid, BPlusNode& node);
+    void readFromMemory(uint32_t pid, BPlusNode& node) const;
+    const BPlusNode* getNodeFromMemory(uint32_t pid) const;
     void write(uint32_t pid, const BPlusNode& node);
     void splitLeaf(uint32_t leafPid, BPlusNode& leaf, int& promotedKey, uint32_t& newLeafPid);
     void print_tree_recursive(uint32_t pid, int level);

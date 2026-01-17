@@ -102,6 +102,7 @@ void print_usage(const char* program_name) {
     std::cout << "  --no-cache       Disable query caching" << std::endl;
     std::cout << "  --parallel       Enable parallel KNN search (auto-detects optimal thread count)" << std::endl;
     std::cout << "  --threads        Number of threads for parallel search (0 = auto, default)" << std::endl;
+    std::cout << "  --memory-index   Load entire index into memory before searching (faster for multiple queries)" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  Batch RFANN test:" << std::endl;
@@ -123,6 +124,7 @@ int main(int argc, char* argv[]) {
     bool cache_enabled = true;
     bool use_parallel = false;
     int num_threads = 0;  // 0 = auto-detect
+    bool use_memory_index = false;
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
@@ -146,6 +148,8 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--threads" && i + 1 < argc) {
             num_threads = std::atoi(argv[++i]);
             use_parallel = true;  // Implicitly enable parallel if threads specified
+        } else if (arg == "--memory-index") {
+            use_memory_index = true;
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -190,10 +194,21 @@ int main(int argc, char* argv[]) {
         cache.load_config(idx_dir.get_config_file_path());
     }
 
+    // Load index into memory if requested
+    if (use_memory_index) {
+        std::cout << "Loading index into memory..." << std::endl;
+        auto load_start = std::chrono::high_resolution_clock::now();
+        dataTree.loadIntoMemory();
+        auto load_end = std::chrono::high_resolution_clock::now();
+        auto load_duration = std::chrono::duration_cast<std::chrono::milliseconds>(load_end - load_start);
+        std::cout << "Index loaded into memory in " << load_duration.count() << " ms" << std::endl;
+    }
+
     // Log test configuration
     std::ostringstream config_log;
     config_log << "Search test configuration | Cache: " << (cache_enabled ? "enabled" : "disabled")
-               << " | Parallel: " << (use_parallel ? "enabled" : "disabled");
+               << " | Parallel: " << (use_parallel ? "enabled" : "disabled")
+               << " | Memory Index: " << (use_memory_index ? "enabled" : "disabled");
     if (use_parallel) config_log << " | Threads: " << num_threads;
     if (has_queries) config_log << " | Query file provided: yes";
     Logger::log_config(config_log.str());
@@ -204,6 +219,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled") << std::endl;
+    std::cout << "Memory Index: " << (use_memory_index ? "enabled" : "disabled") << std::endl;
     std::cout << "Range filter (from tree): [" << min_key << ", " << max_key << "]" << std::endl;
 
     // If no queries file provided, run simple tests
@@ -215,7 +231,7 @@ int main(int argc, char* argv[]) {
         int test_max = max_key;
         
         auto start = std::chrono::high_resolution_clock::now();
-        std::vector<DataObject*> results = dataTree.search_range(test_min, test_max);
+        std::vector<DataObject*> results = dataTree.search_range(test_min, test_max, use_memory_index);
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         
@@ -272,7 +288,8 @@ int main(int argc, char* argv[]) {
     std::cout << "Configuration: K=" << k_neighbors << " | Range=[" << min_key << "," << max_key << "]" << std::endl;
     std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled");
     if (use_parallel) std::cout << " | Threads: " << (num_threads > 0 ? std::to_string(num_threads) : "auto-detect");
-    std::cout << std::endl << std::endl;
+    std::cout << std::endl;
+    std::cout << "Memory Index: " << (use_memory_index ? "enabled" : "disabled") << std::endl << std::endl;
     
     double total_recall = 0.0;
     long long total_range_time = 0;
@@ -312,9 +329,9 @@ int main(int argc, char* argv[]) {
             
             std::vector<DataObject*> knn_results;
             if (use_parallel) {
-                knn_results = dataTree.search_knn_parallel(query_vec, min_key, max_key, k_neighbors, num_threads);
+                knn_results = dataTree.search_knn_parallel(query_vec, min_key, max_key, k_neighbors, num_threads, use_memory_index);
             } else {
-                knn_results = dataTree.search_knn_optimized(query_vec, min_key, max_key, k_neighbors);
+                knn_results = dataTree.search_knn_optimized(query_vec, min_key, max_key, k_neighbors, use_memory_index);
             }
             auto knn_end = std::chrono::high_resolution_clock::now();
             auto query_duration = std::chrono::duration_cast<std::chrono::microseconds>(knn_end - knn_start).count();

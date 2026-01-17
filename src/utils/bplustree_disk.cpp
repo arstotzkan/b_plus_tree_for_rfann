@@ -26,6 +26,69 @@ void DiskBPlusTree::write(uint32_t pid, const BPlusNode& node) {
     pm->writeNode(pid, node);
 }
 
+bool DiskBPlusTree::loadIntoMemory() {
+    memory_index_.clear();
+    memory_index_loaded_ = false;
+    
+    uint32_t rootPid = pm->getRoot();
+    if (rootPid == INVALID_PAGE) {
+        memory_index_loaded_ = true;
+        return true;
+    }
+    
+    // BFS traversal to load all nodes into memory
+    std::queue<uint32_t> to_visit;
+    to_visit.push(rootPid);
+    
+    while (!to_visit.empty()) {
+        uint32_t pid = to_visit.front();
+        to_visit.pop();
+        
+        if (memory_index_.find(pid) != memory_index_.end()) {
+            continue;  // Already loaded
+        }
+        
+        BPlusNode node;
+        pm->readNode(pid, node);
+        memory_index_[pid] = node;
+        
+        if (!node.isLeaf) {
+            // Add children to visit queue
+            for (int i = 0; i <= node.keyCount; i++) {
+                if (node.children[i] != INVALID_PAGE) {
+                    to_visit.push(node.children[i]);
+                }
+            }
+        }
+    }
+    
+    memory_index_loaded_ = true;
+    return true;
+}
+
+void DiskBPlusTree::clearMemoryIndex() {
+    memory_index_.clear();
+    memory_index_loaded_ = false;
+}
+
+void DiskBPlusTree::readFromMemory(uint32_t pid, BPlusNode& node) const {
+    auto it = memory_index_.find(pid);
+    if (it != memory_index_.end()) {
+        node = it->second;
+    } else {
+        // Fallback to disk read if not found in memory (shouldn't happen if properly loaded)
+        pm->readNode(pid, node);
+    }
+}
+
+const BPlusNode* DiskBPlusTree::getNodeFromMemory(uint32_t pid) const {
+    auto it = memory_index_.find(pid);
+    if (it != memory_index_.end()) {
+        return &(it->second);
+    }
+    return nullptr;
+}
+
 BPlusNode DiskBPlusTree::createNode() const {
     BPlusNode node;
     node.init(pm->getOrder(), pm->getMaxVectorSize());
@@ -240,7 +303,7 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
     pm->setRoot(newRootPid);
 }
 
-DataObject* DiskBPlusTree::search_data_object(const DataObject& obj) {
+DataObject* DiskBPlusTree::search_data_object(const DataObject& obj, bool use_memory_index) {
     int key;
     if (obj.is_int_value()) {
         key = obj.get_int_value();
@@ -251,31 +314,37 @@ DataObject* DiskBPlusTree::search_data_object(const DataObject& obj) {
     uint32_t pid = pm->getRoot();
     if (pid == INVALID_PAGE) return nullptr;
     
-    BPlusNode node;
-    
-    while (true) {
-        read(pid, node);
-        
-        int i = 0;
-        while (i < node.keyCount && key > node.keys[i]) i++;
-        
-        if (node.isLeaf) break;
-        pid = node.children[i];
-    }
-    
     bool useSeparateStorage = pm->getConfig().use_separate_storage;
     uint32_t maxVecSize = pm->getMaxVectorSize();
     
-    for (int i = 0; i < node.keyCount; i++) {
-        if (node.keys[i] == key) {
+    BPlusNode diskNode;
+    const BPlusNode* nodePtr = nullptr;
+    
+    while (true) {
+        if (use_memory_index && memory_index_loaded_) {
+            nodePtr = getNodeFromMemory(pid);
+        } else {
+            read(pid, diskNode);
+            nodePtr = &diskNode;
+        }
+        
+        int i = 0;
+        while (i < nodePtr->keyCount && key > nodePtr->keys[i]) i++;
+        
+        if (nodePtr->isLeaf) break;
+        pid = nodePtr->children[i];
+    }
+    
+    for (int i = 0; i < nodePtr->keyCount; i++) {
+        if (nodePtr->keys[i] == key) {
             std::vector<float> vec;
             if (useSeparateStorage) {
                 uint32_t actual_size;
-                pm->getVectorStore()->retrieveVector(node.vector_ids[i], vec, actual_size);
+                pm->getVectorStore()->retrieveVector(nodePtr->vector_ids[i], vec, actual_size);
             } else {
-                vec.resize(node.vector_sizes[i]);
-                for (int j = 0; j < node.vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
-                    vec[j] = node.data_vectors[i][j];
+                vec.resize(nodePtr->vector_sizes[i]);
+                for (int j = 0; j < nodePtr->vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
+                    vec[j] = nodePtr->data_vectors[i][j];
                 }
             }
             DataObject* result = new DataObject(vec, key);
@@ -286,62 +355,75 @@ DataObject* DiskBPlusTree::search_data_object(const DataObject& obj) {
     return nullptr;
 }
 
-DataObject* DiskBPlusTree::search_data_object(int key) {
+DataObject* DiskBPlusTree::search_data_object(int key, bool use_memory_index) {
     uint32_t pid = pm->getRoot();
     if (pid == INVALID_PAGE) return nullptr;
     
     bool useSeparateStorage = pm->getConfig().use_separate_storage;
     uint32_t maxVecSize = pm->getMaxVectorSize();
     
-    BPlusNode node;
+    BPlusNode diskNode;
+    const BPlusNode* nodePtr = nullptr;
     
     // Navigate to the leaf that should contain the key
     while (true) {
-        read(pid, node);
+        if (use_memory_index && memory_index_loaded_) {
+            nodePtr = getNodeFromMemory(pid);
+        } else {
+            read(pid, diskNode);
+            nodePtr = &diskNode;
+        }
         
         int i = 0;
-        while (i < node.keyCount && key > node.keys[i]) i++;
+        while (i < nodePtr->keyCount && key > nodePtr->keys[i]) i++;
         
-        if (node.isLeaf) break;
-        pid = node.children[i];
+        if (nodePtr->isLeaf) break;
+        pid = nodePtr->children[i];
     }
     
     // Search through leaf nodes (following next pointers if needed)
     // This handles cases where separator keys may not perfectly guide to the right leaf
     uint32_t currentPid = pid;
     while (currentPid != INVALID_PAGE) {
-        BPlusNode leaf;
-        read(currentPid, leaf);
+        const BPlusNode* leafPtr = nullptr;
+        BPlusNode diskLeaf;
+        if (use_memory_index && memory_index_loaded_) {
+            leafPtr = getNodeFromMemory(currentPid);
+        } else {
+            read(currentPid, diskLeaf);
+            leafPtr = &diskLeaf;
+        }
+        if (!leafPtr) break;
         
-        for (int i = 0; i < leaf.keyCount; i++) {
-            if (leaf.keys[i] == key) {
+        for (int i = 0; i < leafPtr->keyCount; i++) {
+            if (leafPtr->keys[i] == key) {
                 std::vector<float> vec;
                 if (useSeparateStorage) {
                     uint32_t actual_size;
-                    pm->getVectorStore()->retrieveVector(leaf.vector_ids[i], vec, actual_size);
+                    pm->getVectorStore()->retrieveVector(leafPtr->vector_ids[i], vec, actual_size);
                 } else {
-                    vec.resize(leaf.vector_sizes[i]);
-                    for (int j = 0; j < leaf.vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
-                        vec[j] = leaf.data_vectors[i][j];
+                    vec.resize(leafPtr->vector_sizes[i]);
+                    for (int j = 0; j < leafPtr->vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
+                        vec[j] = leafPtr->data_vectors[i][j];
                     }
                 }
                 DataObject* result = new DataObject(vec, key);
                 return result;
             }
             // If we've passed the key, it doesn't exist
-            if (leaf.keys[i] > key) {
+            if (leafPtr->keys[i] > key) {
                 return nullptr;
             }
         }
         
-        currentPid = leaf.next;
+        currentPid = leafPtr->next;
     }
     
     return nullptr;
 }
 
-DataObject* DiskBPlusTree::search_data_object(float key) {
-    return search_data_object(static_cast<int>(key));
+DataObject* DiskBPlusTree::search_data_object(float key, bool use_memory_index) {
+    return search_data_object(static_cast<int>(key), use_memory_index);
 }
 
 bool DiskBPlusTree::delete_data_object(const DataObject& obj) {
@@ -1028,7 +1110,7 @@ void DiskBPlusTree::mergeWithRightSibling(BPlusNode& parent, int childIdx, BPlus
     parent.keyCount--;
 }
 
-std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key) {
+std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key, bool use_memory_index) {
     std::vector<DataObject*> results;
     
     uint32_t pid = pm->getRoot();
@@ -1037,52 +1119,64 @@ std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key) {
     }
     
     uint32_t maxVecSize = pm->getMaxVectorSize();
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
     
     // Find leaf node that contains min_key
-    BPlusNode node;
+    BPlusNode diskNode;
+    const BPlusNode* nodePtr = nullptr;
     
     while (true) {
-        read(pid, node);
+        if (use_memory_index && memory_index_loaded_) {
+            nodePtr = getNodeFromMemory(pid);
+        } else {
+            read(pid, diskNode);
+            nodePtr = &diskNode;
+        }
         
         int i = 0;
-        while (i < node.keyCount && min_key > node.keys[i]) i++;
+        while (i < nodePtr->keyCount && min_key > nodePtr->keys[i]) i++;
         
-        if (node.isLeaf) {
+        if (nodePtr->isLeaf) {
             break;
         }
-        pid = node.children[i];
+        pid = nodePtr->children[i];
     }
     
     // Collect data from this leaf and subsequent leaves until max_key is reached
     uint32_t currentPid = pid;
     
     while (currentPid != INVALID_PAGE) {
-        BPlusNode leaf;
-        read(currentPid, leaf);
-                
-        bool useSeparateStorage = pm->getConfig().use_separate_storage;
+        const BPlusNode* leafPtr = nullptr;
+        BPlusNode diskLeaf;
+        if (use_memory_index && memory_index_loaded_) {
+            leafPtr = getNodeFromMemory(currentPid);
+        } else {
+            read(currentPid, diskLeaf);
+            leafPtr = &diskLeaf;
+        }
+        if (!leafPtr) break;
         
-        for (int i = 0; i < leaf.keyCount; i++) {
-            if (leaf.keys[i] >= min_key && leaf.keys[i] <= max_key) {
+        for (int i = 0; i < leafPtr->keyCount; i++) {
+            if (leafPtr->keys[i] >= min_key && leafPtr->keys[i] <= max_key) {
                 std::vector<float> vec;
                 if (useSeparateStorage) {
                     uint32_t actual_size;
-                    pm->getVectorStore()->retrieveVector(leaf.vector_ids[i], vec, actual_size);
+                    pm->getVectorStore()->retrieveVector(leafPtr->vector_ids[i], vec, actual_size);
                 } else {
-                    vec.resize(leaf.vector_sizes[i]);
-                    for (int j = 0; j < leaf.vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
-                        vec[j] = leaf.data_vectors[i][j];
+                    vec.resize(leafPtr->vector_sizes[i]);
+                    for (int j = 0; j < leafPtr->vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
+                        vec[j] = leafPtr->data_vectors[i][j];
                     }
                 }
-                DataObject* result = new DataObject(vec, leaf.keys[i]);
+                DataObject* result = new DataObject(vec, leafPtr->keys[i]);
                 results.push_back(result);
             }
-            else if (leaf.keys[i] > max_key) {
+            else if (leafPtr->keys[i] > max_key) {
                 return results; // We've passed the range
             }
         }
         
-        uint32_t nextPid = leaf.next;
+        uint32_t nextPid = leafPtr->next;
         
         if (nextPid == currentPid) {
             break;  // Circular reference protection
@@ -1094,11 +1188,11 @@ std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key) {
     return results;
 }
 
-std::vector<DataObject*> DiskBPlusTree::search_range(float min_key, float max_key) {
-    return search_range(static_cast<int>(min_key), static_cast<int>(max_key));
+std::vector<DataObject*> DiskBPlusTree::search_range(float min_key, float max_key, bool use_memory_index) {
+    return search_range(static_cast<int>(min_key), static_cast<int>(max_key), use_memory_index);
 }
 
-bool DiskBPlusTree::search(const DataObject& obj) {
+bool DiskBPlusTree::search(const DataObject& obj, bool use_memory_index) {
     int key;
     if (obj.is_int_value()) {
         key = obj.get_int_value();
@@ -1109,20 +1203,26 @@ bool DiskBPlusTree::search(const DataObject& obj) {
     uint32_t pid = pm->getRoot();
     if (pid == INVALID_PAGE) return false;
     
-    BPlusNode node;
+    BPlusNode diskNode;
+    const BPlusNode* nodePtr = nullptr;
     
     while (true) {
-        read(pid, node);
+        if (use_memory_index && memory_index_loaded_) {
+            nodePtr = getNodeFromMemory(pid);
+        } else {
+            read(pid, diskNode);
+            nodePtr = &diskNode;
+        }
         
         int i = 0;
-        while (i < node.keyCount && key > node.keys[i]) i++;
+        while (i < nodePtr->keyCount && key > nodePtr->keys[i]) i++;
         
-        if (node.isLeaf) break;
-        pid = node.children[i];
+        if (nodePtr->isLeaf) break;
+        pid = nodePtr->children[i];
     }
     
-    for (int i = 0; i < node.keyCount; i++) {
-        if (node.keys[i] == key) {
+    for (int i = 0; i < nodePtr->keyCount; i++) {
+        if (nodePtr->keys[i] == key) {
             return true;
         }
     }
@@ -1231,7 +1331,7 @@ static double calculate_euclidean_distance(const std::vector<float>& v1, const s
     return std::sqrt(sum);
 }
 
-std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<float>& query_vector, int min_key, int max_key, int k) {
+std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<float>& query_vector, int min_key, int max_key, int k, bool use_memory_index) {
     auto search_start = std::chrono::high_resolution_clock::now();
     std::vector<DataObject*> results;
     
@@ -1248,20 +1348,26 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
     
     // Find leaf node that contains min_key
     auto traversal_start = std::chrono::high_resolution_clock::now();
-    BPlusNode node;
+    BPlusNode diskNode;
+    const BPlusNode* nodePtr = nullptr;
     int tree_reads = 0;
     
     while (true) {
-        read(pid, node);
+        if (use_memory_index && memory_index_loaded_) {
+            nodePtr = getNodeFromMemory(pid);
+        } else {
+            read(pid, diskNode);
+            nodePtr = &diskNode;
+        }
         tree_reads++;
         
         int i = 0;
-        while (i < node.keyCount && min_key > node.keys[i]) i++;
+        while (i < nodePtr->keyCount && min_key > nodePtr->keys[i]) i++;
         
-        if (node.isLeaf) {
+        if (nodePtr->isLeaf) {
             break;
         }
-        pid = node.children[i];
+        pid = nodePtr->children[i];
     }
     
     auto traversal_end = std::chrono::high_resolution_clock::now();
@@ -1284,35 +1390,95 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
     int last_progress_percent = -1;
     auto last_progress_time = leaf_scan_start;
     
-    // Read-ahead buffer: prefetch next leaves while processing current one
-    const int READAHEAD_SIZE = 3;  // Prefetch 3 leaves ahead
-    std::vector<BPlusNode> readahead_buffer;
-    std::vector<uint32_t> readahead_pids;
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
     
-    // Initial batch read: load first leaf + readahead leaves
-    auto batch_read_start = std::chrono::high_resolution_clock::now();
-    BPlusNode current_leaf;
-    read(currentPid, current_leaf);
-    leaf_reads++;
-    
-    // Batch read next READAHEAD_SIZE leaves
-    uint32_t next_pid = current_leaf.next;
-    for (int i = 0; i < READAHEAD_SIZE && next_pid != INVALID_PAGE; i++) {
-        BPlusNode ahead_leaf;
-        read(next_pid, ahead_leaf);
-        leaf_reads++;
-        readahead_buffer.push_back(ahead_leaf);
-        readahead_pids.push_back(next_pid);
-        next_pid = ahead_leaf.next;
+    // Use different strategies for memory index vs disk
+    if (use_memory_index && memory_index_loaded_) {
+        // MEMORY INDEX PATH: Use direct pointers, no copying
+        while (currentPid != INVALID_PAGE) {
+            const BPlusNode* leafPtr = getNodeFromMemory(currentPid);
+            if (!leafPtr) break;
+            leaf_reads++;
+            
+            for (int i = 0; i < leafPtr->keyCount; i++) {
+                if (leafPtr->keys[i] >= min_key && leafPtr->keys[i] <= max_key) {
+                    vectors_processed++;
+                    keys_processed++;
+                    
+                    // Progress logging
+                    int progress_percent = (keys_processed * 100) / range_size;
+                    if (progress_percent != last_progress_percent && progress_percent % 10 == 0) {
+                        auto current_time = std::chrono::high_resolution_clock::now();
+                        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - last_progress_time).count();
+                        Logger::info("Search progress: " + std::to_string(progress_percent) + "% (" + 
+                                    std::to_string(keys_processed) + "/" + std::to_string(range_size) + " keys) | " +
+                                    std::to_string(vectors_processed) + " vectors | " + std::to_string(elapsed) + "ms");
+                        last_progress_percent = progress_percent;
+                        last_progress_time = current_time;
+                    }
+                    
+                    // Retrieve vector
+                    std::vector<float> vec;
+                    if (useSeparateStorage) {
+                        uint32_t actual_size;
+                        pm->getVectorStore()->retrieveVector(leafPtr->vector_ids[i], vec, actual_size);
+                    } else {
+                        vec.resize(leafPtr->vector_sizes[i]);
+                        for (int j = 0; j < leafPtr->vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
+                            vec[j] = leafPtr->data_vectors[i][j];
+                        }
+                    }
+                    
+                    double distance = calculate_euclidean_distance(query_vector, vec);
+                    DataObject* candidate = new DataObject(vec, leafPtr->keys[i]);
+                    
+                    if (knn_heap.size() < static_cast<size_t>(k)) {
+                        knn_heap.push({distance, candidate});
+                    } else if (distance < knn_heap.top().first) {
+                        delete knn_heap.top().second;
+                        knn_heap.pop();
+                        knn_heap.push({distance, candidate});
+                    } else {
+                        delete candidate;
+                    }
+                }
+                else if (leafPtr->keys[i] > max_key) {
+                    goto extract_results;
+                }
+            }
+            currentPid = leafPtr->next;
+        }
+        goto extract_results;
     }
-    auto batch_read_end = std::chrono::high_resolution_clock::now();
-    readahead_time += std::chrono::duration_cast<std::chrono::microseconds>(batch_read_end - batch_read_start).count();
     
-    while (currentPid != INVALID_PAGE) {
-        BPlusNode leaf = current_leaf;
-                
-        for (int i = 0; i < leaf.keyCount; i++) {
-            if (leaf.keys[i] >= min_key && leaf.keys[i] <= max_key) {
+    // DISK PATH: Use read-ahead buffer for better I/O performance
+    {
+        const int READAHEAD_SIZE = 3;
+        std::vector<BPlusNode> readahead_buffer;
+        std::vector<uint32_t> readahead_pids;
+        
+        auto batch_read_start = std::chrono::high_resolution_clock::now();
+        BPlusNode current_leaf;
+        read(currentPid, current_leaf);
+        leaf_reads++;
+        
+        uint32_t next_pid = current_leaf.next;
+        for (int i = 0; i < READAHEAD_SIZE && next_pid != INVALID_PAGE; i++) {
+            BPlusNode ahead_leaf;
+            read(next_pid, ahead_leaf);
+            leaf_reads++;
+            readahead_buffer.push_back(ahead_leaf);
+            readahead_pids.push_back(next_pid);
+            next_pid = ahead_leaf.next;
+        }
+        auto batch_read_end = std::chrono::high_resolution_clock::now();
+        readahead_time += std::chrono::duration_cast<std::chrono::microseconds>(batch_read_end - batch_read_start).count();
+        
+        while (currentPid != INVALID_PAGE) {
+            const BPlusNode& leaf = current_leaf;
+                    
+            for (int i = 0; i < leaf.keyCount; i++) {
+                if (leaf.keys[i] >= min_key && leaf.keys[i] <= max_key) {
                 vectors_processed++;
                 keys_processed++;
                 
@@ -1346,7 +1512,6 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
                 // Retrieve vector from storage
                 auto vec_start = std::chrono::high_resolution_clock::now();
                 std::vector<float> vec;
-                bool useSeparateStorage = pm->getConfig().use_separate_storage;
                 if (useSeparateStorage) {
                     uint32_t actual_size;
                     pm->getVectorStore()->retrieveVector(leaf.vector_ids[i], vec, actual_size);
@@ -1422,6 +1587,7 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
             currentPid = INVALID_PAGE;
         }
     }
+    }  // End of DISK PATH block
     
 extract_results:
     auto leaf_scan_end = std::chrono::high_resolution_clock::now();
@@ -1488,7 +1654,8 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_parallel(
     int min_key, 
     int max_key, 
     int k, 
-    int num_threads) {
+    int num_threads,
+    bool use_memory_index) {
     
     auto parallel_start = std::chrono::high_resolution_clock::now();
     std::vector<DataObject*> results;
@@ -1526,7 +1693,7 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_parallel(
     if (actual_threads <= 1 || range_size < MIN_TOTAL_RANGE_FOR_PARALLEL) {
         Logger::debug("Falling back to single-threaded search (range too small or threads=1)");
         Logger::log_query("KNN_PARALLEL", "Fallback to single-threaded (range=" + std::to_string(range_size) + ", K=" + std::to_string(k) + ")", 0.0, 0);
-        return search_knn_optimized(query_vector, min_key, max_key, k);
+        return search_knn_optimized(query_vector, min_key, max_key, k, use_memory_index);
     }
     
     // Divide range into sub-ranges
@@ -1551,6 +1718,8 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_parallel(
     Logger::log_query("KNN_PARALLEL", "Threads: " + std::to_string(actual_threads) + " | Range: [" + std::to_string(min_key) + "," + std::to_string(max_key) + "] | K: " + std::to_string(k), 0.0, 0);
     
     // Worker function for each thread
+    bool useSeparateStorage = pm->getConfig().use_separate_storage;
+    
     auto worker = [&](int thread_id, int sub_min, int sub_max) {
         std::priority_queue<std::pair<double, DataObject*>> local_heap;
         
@@ -1563,46 +1732,53 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_parallel(
         
         if (pid == INVALID_PAGE) return;
         
-        BPlusNode node;
+        BPlusNode diskNode;
+        const BPlusNode* nodePtr = nullptr;
         
         // Navigate to leaf containing sub_min
         while (true) {
-            {
+            if (use_memory_index && memory_index_loaded_) {
+                nodePtr = getNodeFromMemory(pid);
+            } else {
                 std::lock_guard<std::mutex> lock(pm_mutex);
-                read(pid, node);
+                read(pid, diskNode);
+                nodePtr = &diskNode;
             }
             
             int i = 0;
-            while (i < node.keyCount && sub_min > node.keys[i]) i++;
+            while (i < nodePtr->keyCount && sub_min > nodePtr->keys[i]) i++;
             
-            if (node.isLeaf) break;
-            pid = node.children[i];
+            if (nodePtr->isLeaf) break;
+            pid = nodePtr->children[i];
         }
         
         // Traverse leaves in this sub-range
         uint32_t currentPid = pid;
         
         while (currentPid != INVALID_PAGE) {
-            BPlusNode leaf;
-            {
+            const BPlusNode* leafPtr = nullptr;
+            BPlusNode diskLeaf;
+            if (use_memory_index && memory_index_loaded_) {
+                leafPtr = getNodeFromMemory(currentPid);
+            } else {
                 std::lock_guard<std::mutex> lock(pm_mutex);
-                read(currentPid, leaf);
+                read(currentPid, diskLeaf);
+                leafPtr = &diskLeaf;
             }
+            if (!leafPtr) break;
             
-            bool useSeparateStorage = pm->getConfig().use_separate_storage;
-            
-            for (int i = 0; i < leaf.keyCount; i++) {
-                if (leaf.keys[i] >= sub_min && leaf.keys[i] <= sub_max) {
+            for (int i = 0; i < leafPtr->keyCount; i++) {
+                if (leafPtr->keys[i] >= sub_min && leafPtr->keys[i] <= sub_max) {
                     // Retrieve vector from storage
                     std::vector<float> vec;
                     if (useSeparateStorage) {
                         uint32_t actual_size;
                         std::lock_guard<std::mutex> lock(pm_mutex);
-                        pm->getVectorStore()->retrieveVector(leaf.vector_ids[i], vec, actual_size);
+                        pm->getVectorStore()->retrieveVector(leafPtr->vector_ids[i], vec, actual_size);
                     } else {
-                        vec.resize(leaf.vector_sizes[i]);
-                        for (int j = 0; j < leaf.vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
-                            vec[j] = leaf.data_vectors[i][j];
+                        vec.resize(leafPtr->vector_sizes[i]);
+                        for (int j = 0; j < leafPtr->vector_sizes[i] && j < static_cast<int>(maxVecSize); j++) {
+                            vec[j] = leafPtr->data_vectors[i][j];
                         }
                     }
                     
@@ -1613,7 +1789,7 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_parallel(
                         continue;
                     }
                     
-                    DataObject* candidate = new DataObject(vec, leaf.keys[i]);
+                    DataObject* candidate = new DataObject(vec, leafPtr->keys[i]);
                     
                     if (local_heap.size() < static_cast<size_t>(k)) {
                         local_heap.push({distance, candidate});
@@ -1623,17 +1799,17 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_parallel(
                         local_heap.push({distance, candidate});
                     }
                 }
-                else if (leaf.keys[i] > sub_max) {
+                else if (leafPtr->keys[i] > sub_max) {
                     break;  // Done with this sub-range
                 }
             }
             
             // Check if we've exceeded sub-range
-            if (leaf.keyCount > 0 && leaf.keys[leaf.keyCount - 1] > sub_max) {
+            if (leafPtr->keyCount > 0 && leafPtr->keys[leafPtr->keyCount - 1] > sub_max) {
                 break;
             }
             
-            uint32_t nextPid = leaf.next;
+            uint32_t nextPid = leafPtr->next;
             if (nextPid == currentPid || nextPid == INVALID_PAGE) break;
             currentPid = nextPid;
         }

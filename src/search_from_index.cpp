@@ -48,6 +48,7 @@ void print_usage(const char* program_name) {
     std::cout << "  --no-cache    Disable query caching" << std::endl;
     std::cout << "  --parallel    Enable parallel KNN search (auto-detects optimal thread count)" << std::endl;
     std::cout << "  --threads     Number of threads for parallel search (0 = auto, default)" << std::endl;
+    std::cout << "  --memory-index  Load entire index into memory before searching (faster for multiple queries)" << std::endl;
     std::cout << std::endl;
     std::cout << "Note: --value and --min/--max are mutually exclusive" << std::endl;
     std::cout << std::endl;
@@ -76,6 +77,7 @@ int main(int argc, char* argv[]) {
     bool has_vector = false;
     bool has_k = false;
     bool cache_enabled = true;
+    bool use_memory_index = false;
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
@@ -108,6 +110,8 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--threads" && i + 1 < argc) {
             num_threads = std::atoi(argv[++i]);
             use_parallel = true;  // Implicitly enable parallel if threads specified
+        } else if (arg == "--memory-index") {
+            use_memory_index = true;
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -174,10 +178,21 @@ int main(int argc, char* argv[]) {
         cache.load_config(idx_dir.get_config_file_path());
     }
 
+    // Load index into memory if requested
+    if (use_memory_index) {
+        std::cout << "Loading index into memory..." << std::endl;
+        auto load_start = std::chrono::high_resolution_clock::now();
+        dataTree.loadIntoMemory();
+        auto load_end = std::chrono::high_resolution_clock::now();
+        auto load_duration = std::chrono::duration_cast<std::chrono::milliseconds>(load_end - load_start);
+        std::cout << "Index loaded into memory in " << load_duration.count() << " ms" << std::endl;
+    }
+
     // Log query configuration
     std::ostringstream config_log;
     config_log << "Query configuration | Cache: " << (cache_enabled ? "enabled" : "disabled")
-               << " | Parallel: " << (use_parallel ? "enabled" : "disabled");
+               << " | Parallel: " << (use_parallel ? "enabled" : "disabled")
+               << " | Memory Index: " << (use_memory_index ? "enabled" : "disabled");
     if (use_parallel) config_log << " | Threads: " << num_threads;
     Logger::log_config(config_log.str());
 
@@ -193,6 +208,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Index directory: " << index_dir << std::endl;
         std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
         std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled") << std::endl;
+        std::cout << "Memory Index: " << (use_memory_index ? "enabled" : "disabled") << std::endl;
         if (use_parallel) std::cout << "Threads: " << (num_threads > 0 ? std::to_string(num_threads) : "auto-detect") << std::endl;
         std::cout << "Search value: " << search_value << std::endl;
         std::cout << "Starting search..." << std::endl;
@@ -200,13 +216,13 @@ int main(int argc, char* argv[]) {
         if (has_vector && has_k) {
             // Use optimized KNN search for value queries with vector
             if (use_parallel) {
-                results = dataTree.search_knn_parallel(query_vector, search_value, search_value, k_neighbors, num_threads);
+                results = dataTree.search_knn_parallel(query_vector, search_value, search_value, k_neighbors, num_threads, use_memory_index);
             } else {
-                results = dataTree.search_knn_optimized(query_vector, search_value, search_value, k_neighbors);
+                results = dataTree.search_knn_optimized(query_vector, search_value, search_value, k_neighbors, use_memory_index);
             }
         } else {
             // Regular value search without KNN
-            results = dataTree.search_range(search_value, search_value);
+            results = dataTree.search_range(search_value, search_value, use_memory_index);
         }
     } else {
         // Range search
@@ -214,6 +230,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Index directory: " << index_dir << std::endl;
         std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
         std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled") << std::endl;
+        std::cout << "Memory Index: " << (use_memory_index ? "enabled" : "disabled") << std::endl;
         if (use_parallel) std::cout << "Threads: " << (num_threads > 0 ? std::to_string(num_threads) : "auto-detect") << std::endl;
         std::cout << "Range: [" << min_key << ", " << max_key << "]" << std::endl;
         std::cout << "Starting search..." << std::endl;
@@ -221,13 +238,13 @@ int main(int argc, char* argv[]) {
         if (has_vector && has_k) {
             // Use optimized KNN search for range queries with vector
             if (use_parallel) {
-                results = dataTree.search_knn_parallel(query_vector, min_key, max_key, k_neighbors, num_threads);
+                results = dataTree.search_knn_parallel(query_vector, min_key, max_key, k_neighbors, num_threads, use_memory_index);
             } else {
-                results = dataTree.search_knn_optimized(query_vector, min_key, max_key, k_neighbors);
+                results = dataTree.search_knn_optimized(query_vector, min_key, max_key, k_neighbors, use_memory_index);
             }
         } else {
             // Regular range search without KNN
-            results = dataTree.search_range(min_key, max_key);
+            results = dataTree.search_range(min_key, max_key, use_memory_index);
         }
     }
 
