@@ -22,6 +22,11 @@ public:
     void readNode(uint32_t pid, BPlusNode& node);
     void writeNode(uint32_t pid, const BPlusNode& node);
     
+    // Bulk load all pages sequentially (much faster than random reads)
+    // max_memory_mb: 0 = load all, >0 = limit memory usage
+    void loadAllNodes(std::unordered_map<uint32_t, BPlusNode>& nodes, size_t max_memory_mb = 0);
+    size_t estimateNodeMemoryMB() const;
+    
     // Raw page read/write for header
     void readRawPage(uint32_t pid, char* buffer, size_t size);
     void writeRawPage(uint32_t pid, const char* buffer, size_t size);

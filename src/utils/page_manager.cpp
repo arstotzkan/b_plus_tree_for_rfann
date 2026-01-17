@@ -181,6 +181,87 @@ void PageManager::readRawPage(uint32_t pid, char* buffer, size_t size) {
     file_.read(buffer, size);
 }
 
+size_t PageManager::estimateNodeMemoryMB() const {
+    uint32_t total_pages = header_.next_free_page;
+    if (total_pages <= 1) return 0;
+    
+    // Estimate per-node memory: keys + children + vectors + overhead
+    size_t per_node_bytes = 
+        header_.config.order * sizeof(int) +                    // keys
+        (header_.config.order + 1) * sizeof(uint32_t) +         // children
+        header_.config.order * sizeof(int) +                    // vector_sizes
+        header_.config.order * header_.config.max_vector_size * sizeof(float) +  // data_vectors (if inline)
+        header_.config.order * sizeof(uint64_t) +               // vector_ids
+        100;  // overhead for std::vector headers, map entry, etc.
+    
+    return ((total_pages - 1) * per_node_bytes) / (1024 * 1024);
+}
+
+void PageManager::loadAllNodes(std::unordered_map<uint32_t, BPlusNode>& nodes, size_t max_memory_mb) {
+    uint32_t total_pages = header_.next_free_page;
+    if (total_pages <= 1) return;  // Only header page
+    
+    size_t estimated_mb = estimateNodeMemoryMB();
+    std::cout << "Estimated memory for " << (total_pages - 1) << " nodes: " << estimated_mb << " MB" << std::endl;
+    
+    // Check memory limit
+    if (max_memory_mb > 0 && estimated_mb > max_memory_mb) {
+        std::cout << "Warning: Node memory (" << estimated_mb << " MB) exceeds limit (" << max_memory_mb << " MB)" << std::endl;
+        std::cout << "Loading partial node cache..." << std::endl;
+    }
+    
+    std::cout << "Bulk loading pages sequentially..." << std::endl;
+    
+    // Calculate how many nodes we can load
+    size_t per_node_bytes = (estimated_mb * 1024 * 1024) / (total_pages - 1);
+    size_t max_nodes = (max_memory_mb > 0 && per_node_bytes > 0) 
+        ? std::min(static_cast<size_t>(total_pages - 1), (max_memory_mb * 1024 * 1024) / per_node_bytes)
+        : (total_pages - 1);
+    
+    // Pre-reserve map capacity
+    nodes.reserve(max_nodes);
+    
+    // Seek to first data page (page 1, after header)
+    file_.seekg(static_cast<std::streamoff>(header_.config.page_size));
+    
+    size_t loaded = 0;
+    size_t last_progress = 0;
+    size_t memory_used = 0;
+    const size_t memory_limit_bytes = max_memory_mb * 1024 * 1024;
+    
+    // Read all pages sequentially - much faster than random seeks
+    for (uint32_t pid = 1; pid < total_pages; pid++) {
+        // Check memory limit
+        if (max_memory_mb > 0 && memory_used >= memory_limit_bytes) {
+            std::cout << "Memory limit reached at " << loaded << " nodes (" << (memory_used / (1024*1024)) << " MB)" << std::endl;
+            break;
+        }
+        
+        std::fill(page_buffer_.begin(), page_buffer_.end(), 0);
+        file_.read(page_buffer_.data(), header_.config.page_size);
+        
+        if (!file_.good()) {
+            std::cerr << "Error reading page " << pid << std::endl;
+            break;
+        }
+        
+        BPlusNode node;
+        node.deserialize(page_buffer_.data(), header_.config);
+        memory_used += per_node_bytes;
+        nodes[pid] = std::move(node);
+        loaded++;
+        
+        // Progress logging every 10%
+        size_t progress = (loaded * 100) / (total_pages - 1);
+        if (progress >= last_progress + 10) {
+            std::cout << "  Node loading progress: " << progress << "% (" << loaded << "/" << (total_pages - 1) << ", " << (memory_used / (1024*1024)) << " MB)" << std::endl;
+            last_progress = progress;
+        }
+    }
+    
+    std::cout << "Loaded " << loaded << "/" << (total_pages - 1) << " nodes (" << (memory_used / (1024*1024)) << " MB)" << std::endl;
+}
+
 void PageManager::writeRawPage(uint32_t pid, const char* buffer, size_t size) {
     file_.seekp(static_cast<std::streamoff>(pid) * header_.config.page_size);
     file_.write(buffer, size);

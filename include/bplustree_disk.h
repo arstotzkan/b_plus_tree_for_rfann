@@ -40,9 +40,11 @@ public:
     std::pair<int, int> get_key_range();
     
     // In-memory index loading
-    bool loadIntoMemory();
+    // max_memory_mb: 0 = load all, >0 = limit total memory usage (nodes + vectors)
+    bool loadIntoMemory(size_t max_memory_mb = 0);
     void clearMemoryIndex();
     bool isMemoryIndexLoaded() const { return memory_index_loaded_; }
+    size_t estimateTotalMemoryMB() const;
     
     // Access configuration
     const BPTreeConfig& getConfig() const { return pm->getConfig(); }

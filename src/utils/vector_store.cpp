@@ -1,6 +1,7 @@
 #include "vector_store.h"
 #include <iostream>
 #include <cstring>
+#include <algorithm>
 
 // File format:
 // Header (20 bytes):
@@ -107,6 +108,18 @@ void VectorStore::storeVector(uint64_t vector_id, const std::vector<float>& vect
 }
 
 void VectorStore::retrieveVector(uint64_t vector_id, std::vector<float>& vector, uint32_t& actual_size) {
+    // Check in-memory cache first (similar to memory_index_ lookup in DiskBPlusTree)
+    if (memory_cache_loaded_) {
+        auto cache_it = memory_cache_.find(vector_id);
+        if (cache_it != memory_cache_.end()) {
+            const CachedVector& cached = cache_it->second;
+            actual_size = cached.size;
+            vector = cached.data;  // Copy from cache
+            return;
+        }
+    }
+    
+    // Fall back to disk read
     auto it = metadata_.find(vector_id);
     if (it == metadata_.end()) {
         throw std::runtime_error("Vector ID not found in store: " + std::to_string(vector_id));
@@ -184,4 +197,110 @@ void VectorStore::close() {
         writeMetadata();
         file_.close();
     }
+    clearMemoryCache();
+}
+
+size_t VectorStore::estimateMemoryUsageMB() const {
+    size_t total_bytes = 0;
+    for (const auto& pair : metadata_) {
+        // Each vector: size floats * 4 bytes + overhead (~40 bytes per entry)
+        total_bytes += pair.second.size * sizeof(float) + 40;
+    }
+    return total_bytes / (1024 * 1024);
+}
+
+bool VectorStore::loadAllVectorsIntoMemory(size_t max_memory_mb) {
+    memory_cache_.clear();
+    memory_cache_loaded_ = false;
+    
+    size_t total_vectors = metadata_.size();
+    if (total_vectors == 0) {
+        memory_cache_loaded_ = true;
+        return true;
+    }
+    
+    // Estimate memory usage
+    size_t estimated_mb = estimateMemoryUsageMB();
+    std::cout << "Estimated memory for " << total_vectors << " vectors: " << estimated_mb << " MB" << std::endl;
+    
+    // Check memory limit
+    if (max_memory_mb > 0 && estimated_mb > max_memory_mb) {
+        std::cout << "Memory limit exceeded (" << max_memory_mb << " MB). Loading partial cache..." << std::endl;
+    }
+    
+    std::cout << "Loading vectors into memory..." << std::endl;
+    
+    // Sort metadata by offset for sequential disk reads (much faster than random seeks)
+    std::vector<std::pair<uint64_t, VectorMetadata>> sorted_meta(metadata_.begin(), metadata_.end());
+    std::sort(sorted_meta.begin(), sorted_meta.end(), 
+              [](const auto& a, const auto& b) { return a.second.offset < b.second.offset; });
+    
+    // Calculate how many vectors we can load within memory limit
+    size_t vectors_to_load = total_vectors;
+    if (max_memory_mb > 0) {
+        size_t bytes_per_vector_avg = (estimated_mb * 1024 * 1024) / total_vectors;
+        if (bytes_per_vector_avg > 0) {
+            vectors_to_load = std::min(total_vectors, (max_memory_mb * 1024 * 1024) / bytes_per_vector_avg);
+        }
+    }
+    
+    // Pre-reserve hash map capacity
+    memory_cache_.reserve(vectors_to_load);
+    
+    size_t loaded = 0;
+    size_t last_progress = 0;
+    size_t memory_used = 0;
+    const size_t memory_limit_bytes = max_memory_mb * 1024 * 1024;
+    
+    for (const auto& pair : sorted_meta) {
+        // Check memory limit before loading next vector
+        if (max_memory_mb > 0 && memory_used >= memory_limit_bytes) {
+            std::cout << "Memory limit reached at " << loaded << " vectors (" << (memory_used / (1024*1024)) << " MB)" << std::endl;
+            break;
+        }
+        
+        uint64_t vector_id = pair.first;
+        const VectorMetadata& meta = pair.second;
+        
+        CachedVector cached;
+        cached.size = meta.size;
+        cached.data.resize(meta.size);
+        
+        // Seek to vector data
+        file_.seekg(meta.offset);
+        if (!file_.good()) {
+            std::cerr << "Error seeking to vector " << vector_id << " at offset " << meta.offset << std::endl;
+            return false;
+        }
+        
+        // Skip stored_size (we already have it in metadata)
+        file_.seekg(sizeof(uint32_t), std::ios::cur);
+        
+        // Bulk read entire vector at once instead of per-float
+        file_.read(reinterpret_cast<char*>(cached.data.data()), meta.size * sizeof(float));
+        if (!file_.good()) {
+            std::cerr << "Error reading data for vector " << vector_id << std::endl;
+            return false;
+        }
+        
+        memory_used += meta.size * sizeof(float) + 40;  // Approximate overhead
+        memory_cache_[vector_id] = std::move(cached);
+        loaded++;
+        
+        // Progress logging every 10%
+        size_t progress = (loaded * 100) / total_vectors;
+        if (progress >= last_progress + 10) {
+            std::cout << "  Vector loading progress: " << progress << "% (" << loaded << "/" << total_vectors << ", " << (memory_used / (1024*1024)) << " MB)" << std::endl;
+            last_progress = progress;
+        }
+    }
+    
+    std::cout << "Loaded " << loaded << "/" << total_vectors << " vectors into memory (" << (memory_used / (1024*1024)) << " MB)" << std::endl;
+    memory_cache_loaded_ = true;
+    return true;
+}
+
+void VectorStore::clearMemoryCache() {
+    memory_cache_.clear();
+    memory_cache_loaded_ = false;
 }

@@ -26,7 +26,16 @@ void DiskBPlusTree::write(uint32_t pid, const BPlusNode& node) {
     pm->writeNode(pid, node);
 }
 
-bool DiskBPlusTree::loadIntoMemory() {
+size_t DiskBPlusTree::estimateTotalMemoryMB() const {
+    size_t node_mb = pm->estimateNodeMemoryMB();
+    size_t vector_mb = 0;
+    if (pm->getConfig().use_separate_storage && pm->getVectorStore()) {
+        vector_mb = pm->getVectorStore()->estimateMemoryUsageMB();
+    }
+    return node_mb + vector_mb;
+}
+
+bool DiskBPlusTree::loadIntoMemory(size_t max_memory_mb) {
     memory_index_.clear();
     memory_index_loaded_ = false;
     
@@ -36,39 +45,54 @@ bool DiskBPlusTree::loadIntoMemory() {
         return true;
     }
     
-    // BFS traversal to load all nodes into memory
-    std::queue<uint32_t> to_visit;
-    to_visit.push(rootPid);
+    // Estimate total memory needed
+    size_t total_estimated = estimateTotalMemoryMB();
+    std::cout << "Total estimated memory: " << total_estimated << " MB" << std::endl;
     
-    while (!to_visit.empty()) {
-        uint32_t pid = to_visit.front();
-        to_visit.pop();
-        
-        if (memory_index_.find(pid) != memory_index_.end()) {
-            continue;  // Already loaded
+    // Split memory budget between nodes and vectors (if separate storage)
+    size_t node_memory_mb = 0;
+    size_t vector_memory_mb = 0;
+    
+    if (max_memory_mb > 0) {
+        size_t node_mb = pm->estimateNodeMemoryMB();
+        size_t vector_mb = 0;
+        if (pm->getConfig().use_separate_storage && pm->getVectorStore()) {
+            vector_mb = pm->getVectorStore()->estimateMemoryUsageMB();
         }
         
-        BPlusNode node;
-        pm->readNode(pid, node);
-        memory_index_[pid] = node;
-        
-        if (!node.isLeaf) {
-            // Add children to visit queue
-            for (int i = 0; i <= node.keyCount; i++) {
-                if (node.children[i] != INVALID_PAGE) {
-                    to_visit.push(node.children[i]);
-                }
-            }
+        // Allocate proportionally based on estimated sizes
+        if (node_mb + vector_mb > 0) {
+            node_memory_mb = (max_memory_mb * node_mb) / (node_mb + vector_mb);
+            vector_memory_mb = max_memory_mb - node_memory_mb;
+        } else {
+            node_memory_mb = max_memory_mb;
         }
+        
+        std::cout << "Memory budget: " << max_memory_mb << " MB (nodes: " << node_memory_mb << " MB, vectors: " << vector_memory_mb << " MB)" << std::endl;
     }
     
+    // Use bulk sequential loading - much faster than BFS with random seeks
+    pm->loadAllNodes(memory_index_, node_memory_mb);
+    
     memory_index_loaded_ = true;
+    
+    // For separate vector storage, also load all vectors into memory
+    // This creates a similar in-memory structure to data_vectors in BPlusNode
+    if (pm->getConfig().use_separate_storage && pm->getVectorStore()) {
+        pm->getVectorStore()->loadAllVectorsIntoMemory(vector_memory_mb);
+    }
+    
     return true;
 }
 
 void DiskBPlusTree::clearMemoryIndex() {
     memory_index_.clear();
     memory_index_loaded_ = false;
+    
+    // Also clear vector cache when using separate storage
+    if (pm->getConfig().use_separate_storage && pm->getVectorStore()) {
+        pm->getVectorStore()->clearMemoryCache();
+    }
 }
 
 void DiskBPlusTree::readFromMemory(uint32_t pid, BPlusNode& node) const {
