@@ -49,8 +49,14 @@ void print_usage(const char* program_name) {
     std::cout << "  --parallel    Enable parallel KNN search (auto-detects optimal thread count)" << std::endl;
     std::cout << "  --threads     Number of threads for parallel search (0 = auto, default)" << std::endl;
     std::cout << "  --memory-index  Load entire index into memory before searching (faster for multiple queries)" << std::endl;
+    std::cout << "  --vec-sim     Vector similarity threshold for cache matching [0.0-1.0] (default: 1.0 = exact)" << std::endl;
+    std::cout << "  --range-sim   Range similarity threshold for cache matching [0.0-1.0] (default: 1.0 = exact)" << std::endl;
     std::cout << std::endl;
     std::cout << "Note: --value and --min/--max are mutually exclusive" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Similarity thresholds allow using cached results from similar queries:" << std::endl;
+    std::cout << "  --vec-sim 0.95   Accept cached results if query vectors are 95% similar (cosine)" << std::endl;
+    std::cout << "  --range-sim 0.8  Accept cached results if ranges overlap by 80% (IoU)" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  Range search:      " << program_name << " --index data/my_index --min 20 --max 80" << std::endl;
@@ -58,6 +64,7 @@ void print_usage(const char* program_name) {
     std::cout << "  KNN in range:      " << program_name << " --index data/my_index --min 20 --max 80 --vector 10,20,30 --K 5" << std::endl;
     std::cout << "  KNN at value:      " << program_name << " --index data/my_index --value 42 --vector 10,20,30 --K 5" << std::endl;
     std::cout << "  Parallel KNN:      " << program_name << " --index data/my_index --min 0 --max 10000 --vector 1,2,3 --K 10 --parallel" << std::endl;
+    std::cout << "  Similar cache:     " << program_name << " --index data/my_index --min 0 --max 100 --vector 1,2,3 --K 10 --vec-sim 0.95 --range-sim 0.8" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -78,6 +85,8 @@ int main(int argc, char* argv[]) {
     bool has_k = false;
     bool cache_enabled = true;
     bool use_memory_index = false;
+    double vec_sim_threshold = 1.0;   // Default: exact match only
+    double range_sim_threshold = 1.0; // Default: exact match only
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
@@ -112,6 +121,18 @@ int main(int argc, char* argv[]) {
             use_parallel = true;  // Implicitly enable parallel if threads specified
         } else if (arg == "--memory-index") {
             use_memory_index = true;
+        } else if (arg == "--vec-sim" && i + 1 < argc) {
+            vec_sim_threshold = std::atof(argv[++i]);
+            if (vec_sim_threshold < 0.0 || vec_sim_threshold > 1.0) {
+                std::cerr << "Error: --vec-sim must be between 0.0 and 1.0" << std::endl;
+                return 1;
+            }
+        } else if (arg == "--range-sim" && i + 1 < argc) {
+            range_sim_threshold = std::atof(argv[++i]);
+            if (range_sim_threshold < 0.0 || range_sim_threshold > 1.0) {
+                std::cerr << "Error: --range-sim must be between 0.0 and 1.0" << std::endl;
+                return 1;
+            }
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -269,34 +290,47 @@ int main(int argc, char* argv[]) {
         int cache_min = has_value ? search_value : min_key;
         int cache_max = has_value ? search_value : max_key;
         
-        // Check cache first (K is not part of hash - cache stores max K seen)
+        // Check cache first using similarity-based lookup
         std::string query_hash = cache.compute_query_hash(query_vector, cache_min, cache_max);
         bool cache_hit = false;
+        std::string used_similar_query_id;  // Track if we used a similar query's results
         
-        if (cache_enabled && cache.has_cached_result(query_hash, k_neighbors)) {
+        if (cache_enabled) {
+            SimilarityThresholds thresholds(vec_sim_threshold, range_sim_threshold);
             auto cache_start = std::chrono::high_resolution_clock::now();
-            CachedQueryResult cached = cache.get_cached_result(query_hash, k_neighbors);
+            SimilarCacheMatch match = cache.find_similar_cached_result(
+                query_vector, cache_min, cache_max, k_neighbors, thresholds);
             auto cache_end = std::chrono::high_resolution_clock::now();
             auto cache_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_end - cache_start);
             
-            std::cout << "Cache HIT! Retrieved " << cached.neighbors.size() << " cached results:" << std::endl;
-            for (size_t i = 0; i < cached.neighbors.size(); i++) {
-                std::cout << "  #" << (i+1) << " (dist=" << cached.neighbors[i].distance << "): [";
-                const auto& vec = cached.neighbors[i].vector;
-                for (size_t j = 0; j < vec.size(); j++) {
-                    std::cout << vec[j];
-                    if (j < vec.size() - 1) std::cout << ", ";
+            if (match.found) {
+                cache_hit = true;
+                used_similar_query_id = match.query_id;
+                
+                if (match.vector_similarity >= 1.0 && match.range_similarity >= 1.0) {
+                    std::cout << "Cache HIT (exact)! Retrieved " << match.result.neighbors.size() << " cached results:" << std::endl;
+                } else {
+                    std::cout << "Cache HIT (similar)! Vector similarity: " << (match.vector_similarity * 100) << "%, Range IoU: " << (match.range_similarity * 100) << "%" << std::endl;
+                    std::cout << "Retrieved " << match.result.neighbors.size() << " cached results:" << std::endl;
                 }
-                std::cout << "]  (" << cached.neighbors[i].key << ")" << std::endl;
+                
+                for (size_t i = 0; i < match.result.neighbors.size(); i++) {
+                    std::cout << "  #" << (i+1) << " (dist=" << match.result.neighbors[i].distance << "): [";
+                    const auto& vec = match.result.neighbors[i].vector;
+                    for (size_t j = 0; j < vec.size(); j++) {
+                        std::cout << vec[j];
+                        if (j < vec.size() - 1) std::cout << ", ";
+                    }
+                    std::cout << "]  (" << match.result.neighbors[i].key << ")" << std::endl;
+                }
+                
+                std::cout << std::endl << "Query execution time (from cache): " << cache_duration.count() << " us" << std::endl;
+                
+                // Clean up results that were fetched but not needed
+                for (DataObject* obj : results) {
+                    delete obj;
+                }
             }
-            
-            std::cout << std::endl << "Query execution time (from cache): " << cache_duration.count() << " us" << std::endl;
-            
-            // Clean up results that were fetched but not needed
-            for (DataObject* obj : results) {
-                delete obj;
-            }
-            cache_hit = true;
         }
         
         if (!cache_hit) {
@@ -318,10 +352,12 @@ int main(int argc, char* argv[]) {
                 results_for_cache.push_back(neighbor);
             }
 
-            // Store in cache
+            // Store in cache (pass used_similar_query_id to skip caching if we used similar results)
             if (cache_enabled && !results_for_cache.empty()) {
-                cache.store_result(query_hash, query_vector, cache_min, cache_max, k_neighbors, results_for_cache);
-                std::cout << std::endl << "Results cached for future queries." << std::endl;
+                cache.store_result(query_hash, query_vector, cache_min, cache_max, k_neighbors, results_for_cache, used_similar_query_id);
+                if (used_similar_query_id.empty()) {
+                    std::cout << std::endl << "Results cached for future queries." << std::endl;
+                }
             }
 
             // Clean up all results

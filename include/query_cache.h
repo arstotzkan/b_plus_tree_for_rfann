@@ -32,6 +32,26 @@ struct CacheConfig {
     bool cache_enabled = true;
 };
 
+// Similarity thresholds for approximate cache matching
+struct SimilarityThresholds {
+    double vector_similarity_threshold = 1.0;  // 1.0 = exact match only, 0.0 = any vector
+    double range_similarity_threshold = 1.0;   // 1.0 = exact match only, 0.0 = any range
+    
+    // Default: exact match only (backward compatible)
+    SimilarityThresholds() = default;
+    SimilarityThresholds(double vec_thresh, double range_thresh)
+        : vector_similarity_threshold(vec_thresh), range_similarity_threshold(range_thresh) {}
+};
+
+// Result of similarity-based cache lookup
+struct SimilarCacheMatch {
+    bool found = false;
+    std::string query_id;
+    double vector_similarity = 0.0;  // Cosine similarity [0, 1]
+    double range_similarity = 0.0;   // Range IoU [0, 1]
+    CachedQueryResult result;
+};
+
 class QueryCache {
 public:
     explicit QueryCache(const std::string& index_dir, bool enabled = true);
@@ -50,10 +70,23 @@ public:
     CachedQueryResult get_cached_result(const std::string& query_id, int k);
 
     // Store result - updates existing cache if new K is higher
+    // If used_similar_query_id is non-empty, skip caching and update that query's last_used instead
     void store_result(const std::string& query_id,
                       const std::vector<float>& input_vector,
                       int min_key, int max_key, int k,
-                      const std::vector<CachedNeighbor>& results);
+                      const std::vector<CachedNeighbor>& results,
+                      const std::string& used_similar_query_id = "");
+    
+    // Similarity-based cache lookup
+    // Returns the best matching cached query if both similarities exceed thresholds
+    SimilarCacheMatch find_similar_cached_result(
+        const std::vector<float>& query_vector,
+        int min_key, int max_key, int k,
+        const SimilarityThresholds& thresholds) const;
+    
+    // Similarity metrics (public for testing/inspection)
+    static double compute_vector_cosine_similarity(const std::vector<float>& v1, const std::vector<float>& v2);
+    static double compute_range_iou(int min1, int max1, int min2, int max2);
 
     // Update cache when a new DataObject is inserted into the tree
     // Returns number of caches updated

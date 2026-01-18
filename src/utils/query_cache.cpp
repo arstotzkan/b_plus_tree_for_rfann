@@ -99,8 +99,20 @@ CachedQueryResult QueryCache::get_cached_result(const std::string& query_id, int
 void QueryCache::store_result(const std::string& query_id,
                               const std::vector<float>& input_vector,
                               int min_key, int max_key, int k,
-                              const std::vector<CachedNeighbor>& results) {
+                              const std::vector<CachedNeighbor>& results,
+                              const std::string& used_similar_query_id) {
     if (!enabled_) return;
+    
+    // If we used a similar query's results, don't cache this query
+    // Instead, update the similar query's last_used_date
+    if (!used_similar_query_id.empty()) {
+        CachedQueryResult similar_result;
+        if (load_query_result(used_similar_query_id, similar_result)) {
+            similar_result.last_used_date = std::time(nullptr);
+            save_query_result(similar_result);
+        }
+        return;
+    }
     
     // Check if we already have a cached result
     CachedQueryResult existing;
@@ -565,4 +577,150 @@ void QueryCache::update_max_end(IntervalNode* node) {
     if (node->right && node->right->max_end > node->max_end) {
         node->max_end = node->right->max_end;
     }
+}
+
+// ============================================================================
+// SIMILARITY METRICS
+// ============================================================================
+
+double QueryCache::compute_vector_cosine_similarity(const std::vector<float>& v1, const std::vector<float>& v2) {
+    // Cosine Similarity: cos(θ) = (A · B) / (||A|| * ||B||)
+    // Returns value in range [-1, 1], where:
+    //   1.0  = identical direction (most similar)
+    //   0.0  = orthogonal (unrelated)
+    //  -1.0  = opposite direction (most dissimilar)
+    // We normalize to [0, 1] for threshold comparison: (cos + 1) / 2
+    
+    if (v1.empty() || v2.empty()) return 0.0;
+    if (v1.size() != v2.size()) return 0.0;
+    
+    double dot_product = 0.0;
+    double norm_v1 = 0.0;
+    double norm_v2 = 0.0;
+    
+    for (size_t i = 0; i < v1.size(); i++) {
+        dot_product += static_cast<double>(v1[i]) * static_cast<double>(v2[i]);
+        norm_v1 += static_cast<double>(v1[i]) * static_cast<double>(v1[i]);
+        norm_v2 += static_cast<double>(v2[i]) * static_cast<double>(v2[i]);
+    }
+    
+    norm_v1 = std::sqrt(norm_v1);
+    norm_v2 = std::sqrt(norm_v2);
+    
+    if (norm_v1 < 1e-10 || norm_v2 < 1e-10) return 0.0;
+    
+    double cosine = dot_product / (norm_v1 * norm_v2);
+    
+    // Clamp to [-1, 1] to handle floating point errors
+    cosine = std::max(-1.0, std::min(1.0, cosine));
+    
+    // Normalize to [0, 1]: (cosine + 1) / 2
+    // This makes 1.0 = identical, 0.5 = orthogonal, 0.0 = opposite
+    return (cosine + 1.0) / 2.0;
+}
+
+double QueryCache::compute_range_iou(int min1, int max1, int min2, int max2) {
+    // Range IoU (Intersection over Union) for 1D intervals
+    // Also known as Jaccard Index for intervals
+    // Returns value in range [0, 1], where:
+    //   1.0 = identical ranges
+    //   0.0 = no overlap
+    //
+    // Formula: IoU = |intersection| / |union|
+    //   intersection = max(0, min(max1, max2) - max(min1, min2) + 1)
+    //   union = max(max1, max2) - min(min1, min2) + 1
+    
+    // Calculate intersection
+    int intersection_start = std::max(min1, min2);
+    int intersection_end = std::min(max1, max2);
+    int intersection_size = std::max(0, intersection_end - intersection_start + 1);
+    
+    if (intersection_size == 0) return 0.0;
+    
+    // Calculate union
+    int union_start = std::min(min1, min2);
+    int union_end = std::max(max1, max2);
+    int union_size = union_end - union_start + 1;
+    
+    if (union_size <= 0) return 0.0;
+    
+    return static_cast<double>(intersection_size) / static_cast<double>(union_size);
+}
+
+SimilarCacheMatch QueryCache::find_similar_cached_result(
+    const std::vector<float>& query_vector,
+    int min_key, int max_key, int k,
+    const SimilarityThresholds& thresholds) const {
+    
+    SimilarCacheMatch best_match;
+    if (!enabled_) return best_match;
+    
+    // First check for exact match (fast path)
+    std::string exact_hash = compute_query_hash(query_vector, min_key, max_key);
+    if (has_cached_result(exact_hash, k)) {
+        CachedQueryResult cached;
+        if (load_query_result(exact_hash, cached)) {
+            best_match.found = true;
+            best_match.query_id = exact_hash;
+            best_match.vector_similarity = 1.0;
+            best_match.range_similarity = 1.0;
+            best_match.result = cached;
+            // Trim to k neighbors
+            if (static_cast<int>(best_match.result.neighbors.size()) > k) {
+                best_match.result.neighbors.resize(k);
+            }
+            return best_match;
+        }
+    }
+    
+    // If thresholds require exact match, return not found
+    if (thresholds.vector_similarity_threshold >= 1.0 && 
+        thresholds.range_similarity_threshold >= 1.0) {
+        return best_match;
+    }
+    
+    // Search through all cached queries for similar matches
+    double best_combined_score = 0.0;
+    
+    for (const auto& pair : query_ranges_) {
+        const std::string& query_id = pair.first;
+        const QueryRange& range = pair.second;
+        
+        // Quick range check first (cheaper than loading full result)
+        double range_sim = compute_range_iou(min_key, max_key, range.min_key, range.max_key);
+        if (range_sim < thresholds.range_similarity_threshold) {
+            continue;  // Range doesn't meet threshold
+        }
+        
+        // Load the cached result to compare vectors
+        CachedQueryResult cached;
+        if (!load_query_result(query_id, cached)) continue;
+        if (static_cast<int>(cached.neighbors.size()) < k) continue;
+        
+        // Compute vector similarity
+        double vec_sim = compute_vector_cosine_similarity(query_vector, cached.input_vector);
+        if (vec_sim < thresholds.vector_similarity_threshold) {
+            continue;  // Vector doesn't meet threshold
+        }
+        
+        // Both thresholds met - check if this is the best match
+        // Use geometric mean of similarities as combined score
+        double combined_score = std::sqrt(vec_sim * range_sim);
+        
+        if (combined_score > best_combined_score) {
+            best_combined_score = combined_score;
+            best_match.found = true;
+            best_match.query_id = query_id;
+            best_match.vector_similarity = vec_sim;
+            best_match.range_similarity = range_sim;
+            best_match.result = cached;
+        }
+    }
+    
+    // Trim result to k neighbors if found
+    if (best_match.found && static_cast<int>(best_match.result.neighbors.size()) > k) {
+        best_match.result.neighbors.resize(k);
+    }
+    
+    return best_match;
 }

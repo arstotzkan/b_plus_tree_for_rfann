@@ -103,6 +103,8 @@ void print_usage(const char* program_name) {
     std::cout << "  --parallel       Enable parallel KNN search (auto-detects optimal thread count)" << std::endl;
     std::cout << "  --threads        Number of threads for parallel search (0 = auto, default)" << std::endl;
     std::cout << "  --memory-index   Load entire index into memory before searching (faster for multiple queries)" << std::endl;
+    std::cout << "  --vec-sim        Vector similarity threshold for cache matching [0.0-1.0] (default: 1.0 = exact)" << std::endl;
+    std::cout << "  --range-sim      Range similarity threshold for cache matching [0.0-1.0] (default: 1.0 = exact)" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  Batch RFANN test:" << std::endl;
@@ -125,6 +127,8 @@ int main(int argc, char* argv[]) {
     bool use_parallel = false;
     int num_threads = 0;  // 0 = auto-detect
     bool use_memory_index = false;
+    double vec_sim_threshold = 1.0;   // Default: exact match only
+    double range_sim_threshold = 1.0; // Default: exact match only
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
@@ -150,6 +154,18 @@ int main(int argc, char* argv[]) {
             use_parallel = true;  // Implicitly enable parallel if threads specified
         } else if (arg == "--memory-index") {
             use_memory_index = true;
+        } else if (arg == "--vec-sim" && i + 1 < argc) {
+            vec_sim_threshold = std::atof(argv[++i]);
+            if (vec_sim_threshold < 0.0 || vec_sim_threshold > 1.0) {
+                std::cerr << "Error: --vec-sim must be between 0.0 and 1.0" << std::endl;
+                return 1;
+            }
+        } else if (arg == "--range-sim" && i + 1 < argc) {
+            range_sim_threshold = std::atof(argv[++i]);
+            if (range_sim_threshold < 0.0 || range_sim_threshold > 1.0) {
+                std::cerr << "Error: --range-sim must be between 0.0 and 1.0" << std::endl;
+                return 1;
+            }
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -302,24 +318,40 @@ int main(int argc, char* argv[]) {
         std::vector<int> retrieved;
         
         std::string query_hash = cache.compute_query_hash(query_vec, min_key, max_key);
+        std::string used_similar_query_id;  // Track if we used a similar query's results
+        bool cache_hit = false;
         
-        if (cache_enabled && cache.has_cached_result(query_hash, k_neighbors)) {
+        if (cache_enabled) {
+            SimilarityThresholds thresholds(vec_sim_threshold, range_sim_threshold);
             auto cache_start = std::chrono::high_resolution_clock::now();
-            CachedQueryResult cached = cache.get_cached_result(query_hash, k_neighbors);
+            SimilarCacheMatch match = cache.find_similar_cached_result(
+                query_vec, min_key, max_key, k_neighbors, thresholds);
             auto cache_end = std::chrono::high_resolution_clock::now();
             long long cache_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_end - cache_start).count();
-            total_range_time += cache_duration;
             
-            for (const auto& neighbor : cached.neighbors) {
-                retrieved.push_back(neighbor.key);
+            if (match.found) {
+                cache_hit = true;
+                used_similar_query_id = match.query_id;
+                total_range_time += cache_duration;
+                
+                for (const auto& neighbor : match.result.neighbors) {
+                    retrieved.push_back(neighbor.key);
+                }
+                cache_hits++;
+                
+                // Log cache hit
+                std::ostringstream cache_log;
+                if (match.vector_similarity >= 1.0 && match.range_similarity >= 1.0) {
+                    cache_log << "Query #" << (q + 1) << " | CACHE HIT (exact) | Results: " << match.result.neighbors.size();
+                } else {
+                    cache_log << "Query #" << (q + 1) << " | CACHE HIT (similar: vec=" << (match.vector_similarity * 100) 
+                              << "%, range=" << (match.range_similarity * 100) << "%) | Results: " << match.result.neighbors.size();
+                }
+                Logger::log_query("KNN_CACHE", cache_log.str(), cache_duration / 1000.0, match.result.neighbors.size());
             }
-            cache_hits++;
-            
-            // Log cache hit
-            std::ostringstream cache_log;
-            cache_log << "Query #" << (q + 1) << " | CACHE HIT | Results: " << cached.neighbors.size();
-            Logger::log_query("KNN_CACHE", cache_log.str(), cache_duration / 1000.0, cached.neighbors.size());
-        } else {
+        }
+        
+        if (!cache_hit) {
             // Optimized KNN search (parallel or single-threaded)
             auto knn_start = std::chrono::high_resolution_clock::now();
             
@@ -367,10 +399,10 @@ int main(int argc, char* argv[]) {
             auto cache_prep_end = std::chrono::high_resolution_clock::now();
             auto cache_prep_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_prep_end - cache_prep_start).count();
 
-            // Store in cache
+            // Store in cache (pass used_similar_query_id to skip caching if we used similar results)
             auto cache_store_start = std::chrono::high_resolution_clock::now();
             if (cache_enabled && !results_for_cache.empty()) {
-                cache.store_result(query_hash, query_vec, min_key, max_key, k_neighbors, results_for_cache);
+                cache.store_result(query_hash, query_vec, min_key, max_key, k_neighbors, results_for_cache, used_similar_query_id);
             }
             auto cache_store_end = std::chrono::high_resolution_clock::now();
             auto cache_store_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_store_end - cache_store_start).count();
