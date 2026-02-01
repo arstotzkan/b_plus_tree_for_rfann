@@ -17,7 +17,7 @@ public:
     bool cache_exists() const;
     
     static bool create_default_config(const std::string& config_path);
-    bool save_cache_config(bool cache_enabled) const;
+    bool save_cache_config(bool cache_enabled, size_t max_cache_size_mb = 100) const;
     bool read_cache_config() const;
 
 private:

@@ -17,7 +17,7 @@ void print_usage(const char* program_name) {
     std::cout << "  --size, -s               Number of synthetic DataObjects to generate and insert" << std::endl;
     std::cout << "  --dimension, -d          Vector dimension (default: 128)" << std::endl;
     std::cout << "  --order                  B+ tree order (default: auto-calculated based on vector dimension)" << std::endl;
-    std::cout << "  --no-cache               Disable cache creation" << std::endl;
+    std::cout << "  --max-cache-size         Maximum cache size in MB (default: 100)" << std::endl;
     std::cout << "  --separate-vector-storage  Store vectors in separate file (reduces node size)" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
@@ -32,8 +32,8 @@ int main(int argc, char* argv[]) {
     int custom_order = 0;  // 0 = auto-calculate
     bool has_index = false;
     bool has_size = false;
-    bool cache_enabled = true;
     bool separate_vector_storage = false;
+    size_t max_cache_size_mb = 100;
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
@@ -51,8 +51,9 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--order" && i + 1 < argc) {
             custom_order = std::atoi(argv[++i]);
             if (custom_order < 2) custom_order = 2;
-        } else if (arg == "--no-cache") {
-            cache_enabled = false;
+        } else if (arg == "--max-cache-size" && i + 1 < argc) {
+            max_cache_size_mb = std::stoull(argv[++i]);
+            if (max_cache_size_mb == 0) max_cache_size_mb = 100;
         } else if (arg == "--separate-vector-storage") {
             separate_vector_storage = true;
         } else if (arg == "--help" || arg == "-h") {
@@ -80,7 +81,7 @@ int main(int argc, char* argv[]) {
     }
     
     // Save cache configuration
-    if (!idx_dir.save_cache_config(cache_enabled)) {
+    if (!idx_dir.save_cache_config(true, max_cache_size_mb)) {
         std::cerr << "Warning: Failed to save cache configuration" << std::endl;
     }
 
@@ -109,7 +110,7 @@ int main(int argc, char* argv[]) {
     std::cout << "=== Building B+ Tree Index with Synthetic Data ===" << std::endl;
     std::cout << "Index directory: " << index_dir << std::endl;
     std::cout << "Index file: " << idx_dir.get_index_file_path() << std::endl;
-    std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
+    std::cout << "Cache: enabled (max " << max_cache_size_mb << " MB)" << std::endl;
     std::cout << "Data size: " << data_size << std::endl;
     std::cout << std::endl;
     std::cout << "B+ Tree Configuration:" << std::endl;

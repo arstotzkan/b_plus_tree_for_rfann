@@ -18,7 +18,7 @@ void print_usage(const char* program_name) {
     std::cout << "  --index, -o              Path to the index directory (will contain index.bpt and .cache/)" << std::endl;
     std::cout << "  --order                  B+ tree order (default: auto-calculated based on vector dimension)" << std::endl;
     std::cout << "  --batch-size             Number of vectors to process in each batch (default: 10)" << std::endl;
-    std::cout << "  --no-cache               Disable cache creation" << std::endl;
+    std::cout << "  --max-cache-size         Maximum cache size in MB (default: 100)" << std::endl;
     std::cout << "  --separate-vector-storage  Store vectors in separate file (reduces node size)" << std::endl;
     std::cout << std::endl;
     std::cout << "B+ Tree Configuration:" << std::endl;
@@ -40,8 +40,8 @@ int main(int argc, char* argv[]) {
     int custom_order = 0;  // 0 = auto-calculate
     bool has_input = false;
     bool has_index = false;
-    bool cache_enabled = true;
     bool separate_vector_storage = false;
+    size_t max_cache_size_mb = 100;
 
     // Parse command line flags
     for (int i = 1; i < argc; i++) {
@@ -58,9 +58,10 @@ int main(int argc, char* argv[]) {
             if (custom_order < 2) custom_order = 2;
         } else if (arg == "--batch-size" && i + 1 < argc) {
             batch_size = std::atoi(argv[++i]);
-            if (batch_size <= 0) batch_size = 10;
-        } else if (arg == "--no-cache") {
-            cache_enabled = false;
+            if (batch_size <= 0) batch_size = 10000;
+        } else if (arg == "--max-cache-size" && i + 1 < argc) {
+            max_cache_size_mb = std::stoull(argv[++i]);
+            if (max_cache_size_mb == 0) max_cache_size_mb = 100;
         } else if (arg == "--separate-vector-storage") {
             separate_vector_storage = true;
         } else if (arg == "--help" || arg == "-h") {
@@ -83,7 +84,7 @@ int main(int argc, char* argv[]) {
     }
     
     // Save cache configuration
-    if (!idx_dir.save_cache_config(cache_enabled)) {
+    if (!idx_dir.save_cache_config(true, max_cache_size_mb)) {
         std::cerr << "Warning: Failed to save cache configuration" << std::endl;
     }
 
@@ -126,7 +127,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Input file: " << input_path << std::endl;
     std::cout << "Index directory: " << index_dir << std::endl;
     std::cout << "Index file: " << idx_dir.get_index_file_path() << std::endl;
-    std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
+    std::cout << "Cache: enabled (max " << max_cache_size_mb << " MB)" << std::endl;
     std::cout << "Batch size: " << batch_size << " vectors" << std::endl;
     std::cout << std::endl;
     std::cout << "B+ Tree Configuration:" << std::endl;
