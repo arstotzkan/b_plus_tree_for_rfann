@@ -25,6 +25,11 @@ public:
     DiskBPlusTree(const std::string& filename, const BPTreeConfig& config);
     
     void insert_data_object(const DataObject& obj);
+    
+    // Bulk load: efficiently build tree from sorted data (for initial index creation)
+    // Data is sorted by key, leaves are filled to fill_factor capacity, tree is built bottom-up
+    // fill_factor: 0.5 to 1.0, default 0.7 (70% full leaves)
+    void bulk_load(std::vector<DataObject>& objects, float fill_factor = 0.7f);
     bool delete_data_object(const DataObject& obj);  // Delete specific DataObject (matches key + vector)
     bool delete_data_object(int key);                 // Delete first entry with this key
     bool delete_data_object(float key);               // Delete first entry with this key

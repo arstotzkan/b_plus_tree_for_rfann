@@ -307,6 +307,172 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
     pm->setRoot(newRootPid);
 }
 
+void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_factor) {
+    if (objects.empty()) {
+        return;
+    }
+    
+    // Validate fill_factor
+    if (fill_factor < 0.5f) fill_factor = 0.5f;
+    if (fill_factor > 1.0f) fill_factor = 1.0f;
+    
+    uint32_t order = pm->getOrder();
+    int keys_per_leaf = static_cast<int>(order * fill_factor);
+    if (keys_per_leaf < 1) keys_per_leaf = 1;
+    if (keys_per_leaf >= static_cast<int>(order)) keys_per_leaf = order - 1;
+    
+    std::cout << "Bulk loading " << objects.size() << " objects with fill_factor=" 
+              << fill_factor << " (keys_per_leaf=" << keys_per_leaf << ")" << std::endl;
+    
+    auto start_time = std::chrono::high_resolution_clock::now();
+    
+    // Step 1: Sort objects by key
+    std::sort(objects.begin(), objects.end(), [](const DataObject& a, const DataObject& b) {
+        int key_a = a.is_int_value() ? a.get_int_value() : static_cast<int>(a.get_float_value());
+        int key_b = b.is_int_value() ? b.get_int_value() : static_cast<int>(b.get_float_value());
+        return key_a < key_b;
+    });
+    
+    // Step 2: Group objects by key (Model B: unique keys with vector lists)
+    struct KeyGroup {
+        int key;
+        std::vector<const DataObject*> objects;
+    };
+    std::vector<KeyGroup> key_groups;
+    
+    int current_key = objects[0].is_int_value() ? objects[0].get_int_value() 
+                                                 : static_cast<int>(objects[0].get_float_value());
+    key_groups.push_back({current_key, {&objects[0]}});
+    
+    for (size_t i = 1; i < objects.size(); i++) {
+        int key = objects[i].is_int_value() ? objects[i].get_int_value() 
+                                            : static_cast<int>(objects[i].get_float_value());
+        if (key == current_key) {
+            key_groups.back().objects.push_back(&objects[i]);
+        } else {
+            current_key = key;
+            key_groups.push_back({key, {&objects[i]}});
+        }
+    }
+    
+    std::cout << "  Grouped into " << key_groups.size() << " unique keys" << std::endl;
+    
+    // Step 3: Build leaf nodes
+    std::vector<uint32_t> leaf_pids;
+    std::vector<int> leaf_first_keys;
+    
+    size_t group_idx = 0;
+    while (group_idx < key_groups.size()) {
+        BPlusNode leaf = createNode();
+        leaf.isLeaf = true;
+        leaf.keyCount = 0;
+        
+        // Fill this leaf with keys up to keys_per_leaf
+        while (leaf.keyCount < keys_per_leaf && group_idx < key_groups.size()) {
+            const KeyGroup& group = key_groups[group_idx];
+            
+            // Store all vectors for this key
+            uint64_t first_vector_id = 0;
+            uint32_t vector_count = 0;
+            
+            for (const DataObject* obj : group.objects) {
+                const std::vector<float>& vec = obj->get_vector();
+                uint32_t vec_size = static_cast<uint32_t>(vec.size());
+                
+                if (first_vector_id == 0) {
+                    first_vector_id = pm->getVectorStore()->storeVector(vec, vec_size);
+                } else {
+                    first_vector_id = pm->getVectorStore()->appendVectorToList(first_vector_id, vec, vec_size);
+                }
+                vector_count++;
+            }
+            
+            leaf.keys[leaf.keyCount] = group.key;
+            leaf.vector_list_ids[leaf.keyCount] = first_vector_id;
+            leaf.vector_counts[leaf.keyCount] = vector_count;
+            leaf.keyCount++;
+            group_idx++;
+        }
+        
+        uint32_t leaf_pid = pm->allocatePage();
+        leaf_pids.push_back(leaf_pid);
+        leaf_first_keys.push_back(leaf.keys[0]);
+        
+        // Link to previous leaf
+        if (leaf_pids.size() > 1) {
+            BPlusNode prev_leaf;
+            read(leaf_pids[leaf_pids.size() - 2], prev_leaf);
+            prev_leaf.next = leaf_pid;
+            write(leaf_pids[leaf_pids.size() - 2], prev_leaf);
+        }
+        
+        leaf.next = INVALID_PAGE;
+        write(leaf_pid, leaf);
+    }
+    
+    std::cout << "  Created " << leaf_pids.size() << " leaf nodes" << std::endl;
+    
+    // Step 4: Build internal nodes bottom-up
+    if (leaf_pids.size() == 1) {
+        // Single leaf is the root
+        pm->setRoot(leaf_pids[0]);
+    } else {
+        // Build internal node levels
+        std::vector<uint32_t> current_level_pids = leaf_pids;
+        std::vector<int> current_level_keys = leaf_first_keys;
+        
+        int keys_per_internal = static_cast<int>(order * fill_factor);
+        if (keys_per_internal < 1) keys_per_internal = 1;
+        if (keys_per_internal >= static_cast<int>(order)) keys_per_internal = order - 1;
+        
+        while (current_level_pids.size() > 1) {
+            std::vector<uint32_t> next_level_pids;
+            std::vector<int> next_level_keys;
+            
+            size_t child_idx = 0;
+            while (child_idx < current_level_pids.size()) {
+                BPlusNode internal = createNode();
+                internal.isLeaf = false;
+                internal.keyCount = 0;
+                
+                // First child pointer
+                internal.children[0] = current_level_pids[child_idx];
+                int first_key = current_level_keys[child_idx];
+                child_idx++;
+                
+                // Add keys and child pointers
+                while (internal.keyCount < keys_per_internal && child_idx < current_level_pids.size()) {
+                    internal.keys[internal.keyCount] = current_level_keys[child_idx];
+                    internal.children[internal.keyCount + 1] = current_level_pids[child_idx];
+                    internal.keyCount++;
+                    child_idx++;
+                }
+                
+                uint32_t internal_pid = pm->allocatePage();
+                next_level_pids.push_back(internal_pid);
+                next_level_keys.push_back(first_key);
+                write(internal_pid, internal);
+            }
+            
+            std::cout << "  Created " << next_level_pids.size() << " internal nodes at level" << std::endl;
+            current_level_pids = std::move(next_level_pids);
+            current_level_keys = std::move(next_level_keys);
+        }
+        
+        pm->setRoot(current_level_pids[0]);
+    }
+    
+    // Flush vector store
+    pm->getVectorStore()->flush();
+    pm->saveHeader();
+    
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    
+    std::cout << "Bulk load completed in " << duration.count() << " ms" << std::endl;
+    std::cout << "  Root page: " << pm->getRoot() << std::endl;
+}
+
 DataObject* DiskBPlusTree::search_data_object(const DataObject& obj, bool use_memory_index) {
     int key;
     if (obj.is_int_value()) {
