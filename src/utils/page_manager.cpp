@@ -106,11 +106,9 @@ void PageManager::initNewFile(const BPTreeConfig& config) {
         throw std::runtime_error("Cannot reopen index file: " + filename_);
     }
     
-    // Initialize vector store only if separate storage is enabled
-    if (config.use_separate_storage) {
-        std::string vector_store_filename = filename_ + ".vectors";
-        vector_store_ = std::make_unique<VectorStore>(vector_store_filename, config.max_vector_size);
-    }
+    // Always initialize vector store (Model B: vectors always stored separately)
+    std::string vector_store_filename = filename_ + ".vectors";
+    vector_store_ = std::make_unique<VectorStore>(vector_store_filename, config.max_vector_size);
 }
 
 void PageManager::loadExistingFile() {
@@ -133,11 +131,9 @@ void PageManager::loadExistingFile() {
         header_.total_entries = 0;
     }
     
-    // Initialize vector store only if separate storage is enabled
-    if (header_.config.use_separate_storage) {
-        std::string vector_store_filename = filename_ + ".vectors";
-        vector_store_ = std::make_unique<VectorStore>(vector_store_filename, header_.config.max_vector_size);
-    }
+    // Always initialize vector store (Model B: vectors always stored separately)
+    std::string vector_store_filename = filename_ + ".vectors";
+    vector_store_ = std::make_unique<VectorStore>(vector_store_filename, header_.config.max_vector_size);
 }
 
 void PageManager::saveHeader() {
@@ -185,13 +181,12 @@ size_t PageManager::estimateNodeMemoryMB() const {
     uint32_t total_pages = header_.next_free_page;
     if (total_pages <= 1) return 0;
     
-    // Estimate per-node memory: keys + children + vectors + overhead
+    // Estimate per-node memory (Model B: no inline vectors)
     size_t per_node_bytes = 
         header_.config.order * sizeof(int) +                    // keys
         (header_.config.order + 1) * sizeof(uint32_t) +         // children
-        header_.config.order * sizeof(int) +                    // vector_sizes
-        header_.config.order * header_.config.max_vector_size * sizeof(float) +  // data_vectors (if inline)
-        header_.config.order * sizeof(uint64_t) +               // vector_ids
+        header_.config.order * sizeof(uint64_t) +               // vector_list_ids
+        header_.config.order * sizeof(uint32_t) +               // vector_counts
         100;  // overhead for std::vector headers, map entry, etc.
     
     return ((total_pages - 1) * per_node_bytes) / (1024 * 1024);

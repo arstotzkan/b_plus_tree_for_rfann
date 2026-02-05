@@ -18,11 +18,10 @@ void print_usage(const char* program_name) {
     std::cout << "  --dimension, -d          Vector dimension (default: 128)" << std::endl;
     std::cout << "  --order                  B+ tree order (default: auto-calculated based on vector dimension)" << std::endl;
     std::cout << "  --max-cache-size         Maximum cache size in MB (default: 100)" << std::endl;
-    std::cout << "  --separate-vector-storage  Store vectors in separate file (reduces node size)" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  " << program_name << " --index data/my_index --size 1000" << std::endl;
-    std::cout << "  " << program_name << " --index data/my_index --size 1000 --separate-vector-storage" << std::endl;
+    std::cout << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -32,7 +31,6 @@ int main(int argc, char* argv[]) {
     int custom_order = 0;  // 0 = auto-calculate
     bool has_index = false;
     bool has_size = false;
-    bool separate_vector_storage = false;
     size_t max_cache_size_mb = 100;
 
     // Parse command line flags
@@ -54,8 +52,6 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--max-cache-size" && i + 1 < argc) {
             max_cache_size_mb = std::stoull(argv[++i]);
             if (max_cache_size_mb == 0) max_cache_size_mb = 100;
-        } else if (arg == "--separate-vector-storage") {
-            separate_vector_storage = true;
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -88,15 +84,14 @@ int main(int argc, char* argv[]) {
     // Configure B+ tree based on vector dimension
     uint32_t order = (custom_order > 0) ? static_cast<uint32_t>(custom_order) : 4;
     
-    // Auto-suggest order if not specified
+    // Auto-suggest order if not specified (Model B: vectors always stored separately)
     if (custom_order == 0) {
-        order = BPTreeConfig::suggest_order(static_cast<uint32_t>(vector_dimension), 16384, separate_vector_storage ? 1 : 0);
+        order = BPTreeConfig::suggest_order(static_cast<uint32_t>(vector_dimension), 16384);
         if (order < 2) order = 2;
     }
     
     BPTreeConfig config(order, static_cast<uint32_t>(vector_dimension));
-    config.use_separate_storage = separate_vector_storage ? 1 : 0;
-    config.page_size = config.calculate_min_page_size();  // Recalculate after setting storage mode
+    config.page_size = config.calculate_min_page_size();
 
     // Initialize logging
     Logger::init(index_dir, "index");

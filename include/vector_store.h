@@ -10,17 +10,34 @@ public:
     VectorStore(const std::string& filename, uint32_t max_vector_size);
     ~VectorStore();
     
-    void storeVector(uint64_t vector_id, const std::vector<float>& vector, uint32_t actual_size);
+    // Store a single vector, returns its ID
+    uint64_t storeVector(const std::vector<float>& vector, uint32_t actual_size);
+    
+    // Append a vector to an existing list (or start a new list)
+    // Returns the new first_vector_id for the list
+    uint64_t appendVectorToList(uint64_t first_vector_id, const std::vector<float>& vector, uint32_t actual_size);
+    
+    // Retrieve a single vector by ID
     void retrieveVector(uint64_t vector_id, std::vector<float>& vector, uint32_t& actual_size);
+    
+    // Retrieve all vectors in a list starting from first_vector_id
+    void retrieveVectorList(uint64_t first_vector_id, uint32_t count, 
+                           std::vector<std::vector<float>>& vectors, 
+                           std::vector<uint32_t>& sizes);
+    
+    // Delete a vector from a list, returns new first_vector_id (or 0 if list is empty)
+    uint64_t removeVectorFromList(uint64_t first_vector_id, uint32_t count, 
+                                  const std::vector<float>& vector_to_remove,
+                                  uint32_t& new_count);
     
     uint64_t getNextVectorId() const { return next_vector_id_; }
     void setNextVectorId(uint64_t id) { next_vector_id_ = id; }
+    uint32_t getMaxVectorSize() const { return max_vector_size_; }
     
     void flush();
     void close();
     
-    // In-memory vector cache (similar to memory_index_ in DiskBPlusTree)
-    // max_memory_mb: 0 = load all, >0 = limit memory usage
+    // In-memory vector cache
     bool loadAllVectorsIntoMemory(size_t max_memory_mb = 0);
     void clearMemoryCache();
     bool isMemoryCacheLoaded() const { return memory_cache_loaded_; }
@@ -29,14 +46,15 @@ public:
     
 private:
     struct VectorMetadata {
-        uint64_t offset;
-        uint32_t size;
+        uint64_t offset;      // File offset where vector data starts
+        uint32_t size;        // Actual vector dimension
+        uint64_t next_id;     // Next vector in list (0 = end of list)
     };
     
-    // In-memory cache for vectors (mirrors data_vectors structure in BPlusNode)
     struct CachedVector {
         std::vector<float> data;
         uint32_t size;
+        uint64_t next_id;
     };
     
     std::fstream file_;
@@ -53,4 +71,8 @@ private:
     void loadExistingFile();
     void writeMetadata();
     void readMetadata();
+    
+    // Internal: store vector with explicit ID and next pointer
+    void storeVectorInternal(uint64_t vector_id, const std::vector<float>& vector, 
+                            uint32_t actual_size, uint64_t next_id);
 };

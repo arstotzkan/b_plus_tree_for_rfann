@@ -29,31 +29,27 @@ constexpr int MAX_ORDER = 64;
 constexpr int MAX_VECTOR_DIM = 2048;
 
 // Dynamic BPlusNode that works with runtime configuration
+// Model B: Each key is unique within a leaf, and maps to a LIST of vectors in VectorStore
 struct BPlusNode {
     bool isLeaf;
     uint16_t keyCount;
-    std::vector<int> keys;
-    std::vector<uint32_t> children;
-    uint32_t next;
+    std::vector<int> keys;              // Unique keys in this node
+    std::vector<uint32_t> children;     // Child pointers (internal nodes only)
+    uint32_t next;                      // Next leaf pointer (leaf nodes only)
     
-    // For DataObject storage in leaf nodes
-    std::vector<int> vector_sizes;
-    std::vector<std::vector<float>> data_vectors;  // Used for inline storage (default)
-    std::vector<uint64_t> vector_ids;              // Used for separate storage (optional)
+    // For DataObject storage in leaf nodes (Model B: unique key -> vector list)
+    std::vector<uint64_t> vector_list_ids;   // ID of first vector in the list for each key
+    std::vector<uint32_t> vector_counts;     // Number of vectors for each key
     
-    // Initialize with given order and max vector size
-    void init(uint32_t order, uint32_t max_vec_size) {
+    // Initialize with given order (max_vec_size no longer needed for node structure)
+    void init(uint32_t order, uint32_t /*max_vec_size*/ = 0) {
         isLeaf = false;
         keyCount = 0;
         next = INVALID_PAGE;
         keys.resize(order, 0);
         children.resize(order + 1, INVALID_PAGE);
-        vector_sizes.resize(order, 0);
-        data_vectors.resize(order);
-        for (auto& v : data_vectors) {
-            v.resize(max_vec_size, 0.0f);
-        }
-        vector_ids.resize(order, 0);
+        vector_list_ids.resize(order, 0);
+        vector_counts.resize(order, 0);
     }
     
     // Serialize node to raw bytes for disk storage
@@ -88,30 +84,18 @@ struct BPlusNode {
         std::memcpy(ptr, &next, sizeof(uint32_t));
         ptr += sizeof(uint32_t);
         
-        // vector_sizes[order]
+        // vector_list_ids[order] - ID of first vector in list for each key
         for (uint32_t i = 0; i < config.order; i++) {
-            int vs = (i < vector_sizes.size()) ? vector_sizes[i] : 0;
-            std::memcpy(ptr, &vs, sizeof(int));
-            ptr += sizeof(int);
+            uint64_t vid = (i < vector_list_ids.size()) ? vector_list_ids[i] : 0;
+            std::memcpy(ptr, &vid, sizeof(uint64_t));
+            ptr += sizeof(uint64_t);
         }
         
-        // Storage mode dependent serialization
-        if (config.use_separate_storage) {
-            // Separate storage: store vector IDs (8 bytes each)
-            for (uint32_t i = 0; i < config.order; i++) {
-                uint64_t vid = (i < vector_ids.size()) ? vector_ids[i] : 0;
-                std::memcpy(ptr, &vid, sizeof(uint64_t));
-                ptr += sizeof(uint64_t);
-            }
-        } else {
-            // Inline storage: store actual vectors
-            for (uint32_t i = 0; i < config.order; i++) {
-                for (uint32_t j = 0; j < config.max_vector_size; j++) {
-                    float v = (i < data_vectors.size() && j < data_vectors[i].size()) ? data_vectors[i][j] : 0.0f;
-                    std::memcpy(ptr, &v, sizeof(float));
-                    ptr += sizeof(float);
-                }
-            }
+        // vector_counts[order] - number of vectors for each key
+        for (uint32_t i = 0; i < config.order; i++) {
+            uint32_t vc = (i < vector_counts.size()) ? vector_counts[i] : 0;
+            std::memcpy(ptr, &vc, sizeof(uint32_t));
+            ptr += sizeof(uint32_t);
         }
     }
     
@@ -120,7 +104,7 @@ struct BPlusNode {
         const char* ptr = buffer;
         
         // Initialize vectors with proper sizes
-        init(config.order, config.max_vector_size);
+        init(config.order);
         
         // isLeaf
         uint32_t leaf_flag;
@@ -150,27 +134,16 @@ struct BPlusNode {
         std::memcpy(&next, ptr, sizeof(uint32_t));
         ptr += sizeof(uint32_t);
         
-        // vector_sizes[order]
+        // vector_list_ids[order]
         for (uint32_t i = 0; i < config.order; i++) {
-            std::memcpy(&vector_sizes[i], ptr, sizeof(int));
-            ptr += sizeof(int);
+            std::memcpy(&vector_list_ids[i], ptr, sizeof(uint64_t));
+            ptr += sizeof(uint64_t);
         }
         
-        // Storage mode dependent deserialization
-        if (config.use_separate_storage) {
-            // Separate storage: read vector IDs
-            for (uint32_t i = 0; i < config.order; i++) {
-                std::memcpy(&vector_ids[i], ptr, sizeof(uint64_t));
-                ptr += sizeof(uint64_t);
-            }
-        } else {
-            // Inline storage: read actual vectors
-            for (uint32_t i = 0; i < config.order; i++) {
-                for (uint32_t j = 0; j < config.max_vector_size; j++) {
-                    std::memcpy(&data_vectors[i][j], ptr, sizeof(float));
-                    ptr += sizeof(float);
-                }
-            }
+        // vector_counts[order]
+        for (uint32_t i = 0; i < config.order; i++) {
+            std::memcpy(&vector_counts[i], ptr, sizeof(uint32_t));
+            ptr += sizeof(uint32_t);
         }
     }
 };
