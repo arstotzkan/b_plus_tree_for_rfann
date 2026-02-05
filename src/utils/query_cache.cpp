@@ -564,6 +564,27 @@ void QueryCache::find_overlapping_intervals(const IntervalNode* node, int key, s
     }
 }
 
+void QueryCache::find_overlapping_range(const IntervalNode* node, int min_key, int max_key, std::vector<std::string>& result) const {
+    if (!node) return;
+    
+    // Check if current interval overlaps with [min_key, max_key]
+    // Two intervals [a,b] and [c,d] overlap iff a <= d && c <= b
+    if (node->start <= max_key && min_key <= node->end) {
+        result.push_back(node->query_id);
+    }
+    
+    // If left subtree exists and its max_end >= min_key, there might be overlapping intervals
+    if (node->left && node->left->max_end >= min_key) {
+        find_overlapping_range(node->left.get(), min_key, max_key, result);
+    }
+    
+    // If current node's start <= max_key, search right subtree
+    // (intervals in right subtree have start >= node->start, so they could still overlap)
+    if (node->start <= max_key && node->right) {
+        find_overlapping_range(node->right.get(), min_key, max_key, result);
+    }
+}
+
 void QueryCache::update_max_end(IntervalNode* node) {
     if (!node) return;
     
@@ -676,17 +697,23 @@ SimilarCacheMatch QueryCache::find_similar_cached_result(
         return best_match;
     }
     
-    // Search through all cached queries for similar matches
+    // Use interval tree to efficiently find cached queries that overlap with the requested range
+    // This is O(log N + M) where M is the number of overlapping intervals, instead of O(N) linear scan
+    std::vector<std::string> candidate_queries;
+    find_overlapping_range(interval_root_.get(), min_key, max_key, candidate_queries);
+    
+    // Search only through overlapping cached queries
     double best_combined_score = 0.0;
     
-    for (const auto& pair : query_ranges_) {
-        const std::string& query_id = pair.first;
-        const QueryRange& range = pair.second;
+    for (const std::string& query_id : candidate_queries) {
+        auto range_it = query_ranges_.find(query_id);
+        if (range_it == query_ranges_.end()) continue;
+        const QueryRange& range = range_it->second;
         
-        // Quick range check first (cheaper than loading full result)
+        // Compute range similarity (we know they overlap, but need IoU score)
         double range_sim = compute_range_iou(min_key, max_key, range.min_key, range.max_key);
         if (range_sim < thresholds.range_similarity_threshold) {
-            continue;  // Range doesn't meet threshold
+            continue;  // Range IoU doesn't meet threshold
         }
         
         // Load the cached result to compare vectors

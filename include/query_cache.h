@@ -153,6 +153,7 @@ private:
     void insert_interval(std::unique_ptr<IntervalNode>& node, int start, int end, const std::string& query_id);
     void remove_interval(std::unique_ptr<IntervalNode>& node, const std::string& query_id);
     void find_overlapping_intervals(const IntervalNode* node, int key, std::vector<std::string>& result) const;
+    void find_overlapping_range(const IntervalNode* node, int min_key, int max_key, std::vector<std::string>& result) const;
     void update_max_end(IntervalNode* node);
     void save_interval_tree(std::ofstream& file, const IntervalNode* node) const;
     void load_interval_tree(std::ifstream& file, std::unique_ptr<IntervalNode>& node);

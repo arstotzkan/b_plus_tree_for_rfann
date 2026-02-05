@@ -6,18 +6,21 @@ A high-performance disk-based B+ tree implementation optimized for RFANN queries
 
 - **Disk-based B+ Tree**: Efficient storage and retrieval of high-dimensional vectors with configurable page sizes
 - **RFANN Support**: Range-filtered approximate nearest neighbor search with KNN capabilities
-- **Query Caching**: Intelligent caching mechanism with 2-way inverted index for ~36-166x query speedup
-- **Multiple Data Formats**: Support for `.fvecs`, `.npy`, binary, and synthetic data
+- **Query Caching**: Intelligent caching mechanism with interval tree-based inverted index for ~36-166x query speedup
+- **Bulk Loading**: Efficient bottom-up tree construction for initial index creation
+- **Multiple Data Formats**: Support for `.fvecs` and synthetic data generation
 - **Configurable Parameters**: Adjustable page size, tree order, and vector dimensions
-- **Memory Efficient**: Optimized for large datasets with batch processing and move semantics
+- **Memory Index**: Optional in-memory index loading for faster repeated queries
+- **Parallel Search**: Multi-threaded KNN search for large range queries
 
 ## Architecture
 
 ### Core Components
 
 - **DiskBPlusTree**: Main B+ tree implementation with disk-based page management
-- **QueryCache**: LRU cache with hash-based query identification and result storage
-- **IndexDirectory**: Directory-based index management (stores `index.bpt` and `.cache/`)
+- **QueryCache**: LRU cache with interval tree for efficient range-based cache lookups
+- **VectorStore**: Separate storage for high-dimensional vectors (Model B architecture)
+- **IndexDirectory**: Directory-based index management (stores `index.bpt`, `index.bpt.vectors`, and `.cache/`)
 - **DataObject**: Vector and numeric value storage abstraction
 - **PageManager**: Low-level disk I/O and page allocation
 
@@ -25,88 +28,364 @@ A high-performance disk-based B+ tree implementation optimized for RFANN queries
 
 The caching system provides significant performance improvements:
 
-- **Query Hashing**: FNV-1a hash of input vector + range + K parameters
-- **2-way Inverted Index**: Maps numeric keys ↔ query hashes for efficient cache invalidation
+- **Query Hashing**: FNV-1a hash of input vector + range parameters
+- **Interval Tree Index**: O(log N + M) range overlap queries instead of O(N) linear scan
+- **Similarity Matching**: Configurable vector cosine similarity and range IoU thresholds
 - **Binary Cache Files**: Compact storage of query results with metadata (creation/access times)
 - **LRU Eviction**: Configurable size limits with least-recently-used eviction policy
 - **Cache Invalidation**: Automatic invalidation when B+ tree is modified
+
+---
 
 ## Build Instructions
 
 ### Prerequisites
 
-- CMake 3.16 or higher
-- C++17 compatible compiler (Visual Studio 2019+ on Windows, GCC 7+ on Linux)
+| Platform | Requirements |
+|----------|--------------|
+| **Windows** | Visual Studio 2019 or later (with C++ workload), CMake 3.16+ |
+| **Linux** | GCC 7+ or Clang 5+, CMake 3.16+, make |
 
-### Building
+### Building on Windows
 
-```bash
+#### Option 1: Visual Studio Developer Command Prompt
+
+```cmd
+:: Open "Developer Command Prompt for VS 2019/2022"
+cd path\to\b_plus_tree_for_rfann
+
+:: Create build directory
+mkdir build
+cd build
+
+:: Configure with CMake (generates Visual Studio solution)
+cmake .. -G "Visual Studio 17 2022" -A x64
+
+:: Build Release configuration
+cmake --build . --config Release
+
+:: Executables will be in build\src\Release\
+```
+
+#### Option 2: Visual Studio IDE
+
+1. Open Visual Studio
+2. Select **File → Open → CMake...**
+3. Navigate to the project root and select `CMakeLists.txt`
+4. Select **Release** configuration from the dropdown
+5. Build with **Build → Build All** (Ctrl+Shift+B)
+
+#### Option 3: PowerShell with CMake
+
+```powershell
+cd path\to\b_plus_tree_for_rfann
 mkdir build
 cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build . --config Release
 ```
 
-### Configuration Options
+### Building on Linux
 
 ```bash
-# Configure B+ tree parameters (defaults shown)
-cmake .. -DBPTREE_PAGE_SIZE=8192 -DBPTREE_ORDER=4 -DBPTREE_MAX_VECTOR_SIZE=128
+# Clone or navigate to project directory
+cd /path/to/b_plus_tree_for_rfann
+
+# Create build directory
+mkdir -p build
+cd build
+
+# Configure with CMake
+cmake .. -DCMAKE_BUILD_TYPE=Release
+
+# Build (use -j for parallel compilation)
+make -j$(nproc)
+
+# Executables will be in build/src/
 ```
 
-## Usage
+### CMake Configuration Options
 
-### Building Indices
+Configure B+ tree parameters at build time:
 
-#### From FVECS Files
 ```bash
-./build/Release/build_index_fvecs --input data/siftsmall_base.fvecs --index data/sift_index
+cmake .. \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBPTREE_PAGE_SIZE=8192 \
+  -DBPTREE_ORDER=4 \
+  -DBPTREE_MAX_VECTOR_SIZE=128
 ```
 
-#### From NPY Files
+| Option | Default | Description |
+|--------|---------|-------------|
+| `BPTREE_PAGE_SIZE` | 8192 | Page size in bytes for disk I/O |
+| `BPTREE_ORDER` | 4 | B+ tree order (max keys per node) |
+| `BPTREE_MAX_VECTOR_SIZE` | 128 | Maximum vector dimension |
+
+---
+
+## Executables Reference
+
+After building, the following executables are available:
+
+| Executable | Description |
+|------------|-------------|
+| `build_index` | Build index from synthetic data |
+| `build_index_fvecs` | Build index from FVECS file |
+| `search_index` | Interactive search (range/value/KNN) |
+| `search_index_test` | Batch benchmark with groundtruth |
+| `add_node` | Insert a new data object |
+| `remove_node` | Delete a data object |
+| `read_cache` | Inspect cached queries |
+| `clear_cache` | Clear all cached queries |
+
+### build_index
+
+Build a B+ tree index from synthetic random data.
+
 ```bash
-./build/Release/build_index_npy --input data/vectors.npy --index data/npy_index
+build_index --index <dir> --size <count> [options]
 ```
 
-#### From Binary Files
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--index` | `-o` | Path to index directory (required) |
+| `--size` | `-s` | Number of synthetic objects to generate (required) |
+| `--dimension` | `-d` | Vector dimension (default: 128) |
+| `--order` | | B+ tree order (default: auto-calculated) |
+| `--max-cache-size` | | Maximum cache size in MB (default: 100) |
+| `--help` | `-h` | Show help message |
+
+**Example:**
 ```bash
-./build/Release/build_index_binary --input data/vectors.bin --index data/binary_index
+# Windows
+.\build\src\Release\build_index.exe --index data\my_index --size 10000 --dimension 128
+
+# Linux
+./build/src/build_index --index data/my_index --size 10000 --dimension 128
 ```
 
-#### Synthetic Data
+### build_index_fvecs
+
+Build a B+ tree index from a `.fvecs` file (standard vector dataset format).
+
 ```bash
-./build/Release/build_index --index data/synthetic_index --size 1000
+build_index_fvecs --input <file> --index <dir> [options]
 ```
 
-### Searching
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--input` | `-i` | Path to input .fvecs file (required) |
+| `--index` | `-o` | Path to index directory (required) |
+| `--order` | | B+ tree order (default: auto-calculated) |
+| `--batch-size` | | Vectors per batch (default: 10) |
+| `--max-cache-size` | | Maximum cache size in MB (default: 100) |
+| `--help` | `-h` | Show help message |
 
-#### Interactive Search
+**Example:**
 ```bash
-# Range search with KNN
-./build/Release/search_index --index data/sift_index --min 0 --max 100 --vector 1,2,3,4,5 --K 10
+# Windows
+.\build\src\Release\build_index_fvecs.exe --input data\siftsmall_base.fvecs --index data\sift_index
 
-# Value search
-./build/Release/search_index --index data/sift_index --value 42 --vector 1,2,3,4,5 --K 5
+# Linux
+./build/src/build_index_fvecs --input data/siftsmall_base.fvecs --index data/sift_index
 ```
 
-#### Batch Benchmark
+### search_index
+
+Interactive search with support for range queries, value queries, and KNN.
+
 ```bash
-# RFANN benchmark with groundtruth evaluation
-./build/Release/search_index_test --index data/sift_index \
+search_index --index <dir> [--min <n> --max <n> | --value <n>] [options]
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--index` | `-i` | Path to index directory (required) |
+| `--min` | | Minimum key for range search |
+| `--max` | | Maximum key for range search |
+| `--value` | `-v` | Exact key value search |
+| `--vector` | | Query vector (comma-separated floats) |
+| `--K` | `-k` | Number of nearest neighbors |
+| `--limit` | | Limit number of results displayed |
+| `--no-cache` | | Disable query caching |
+| `--parallel` | | Enable parallel KNN search |
+| `--threads` | | Number of threads (0 = auto) |
+| `--memory-index` | | Load index into memory |
+| `--vec-sim` | | Vector similarity threshold [0.0-1.0] |
+| `--range-sim` | | Range similarity threshold [0.0-1.0] |
+| `--help` | `-h` | Show help message |
+
+**Examples:**
+```bash
+# Range search
+search_index --index data/sift_index --min 0 --max 100
+
+# KNN search with query vector
+search_index --index data/sift_index --min 0 --max 1000 --vector 1.0,2.0,3.0 --K 10
+
+# Value search with memory index for speed
+search_index --index data/sift_index --value 42 --memory-index
+
+# Parallel KNN search
+search_index --index data/sift_index --min 0 --max 10000 --vector 1,2,3 --K 50 --parallel --threads 4
+```
+
+### search_index_test
+
+Batch benchmark tool for RFANN evaluation with groundtruth comparison.
+
+```bash
+search_index_test --index <dir> --queries <file> [options]
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--index` | `-i` | Path to index directory (required) |
+| `--queries` | `-q` | Path to query vectors file (.fvecs) |
+| `--groundtruth` | | Path to groundtruth file (.ivecs) |
+| `--num-queries` | | Number of queries to run (default: all) |
+| `--no-cache` | | Disable query caching |
+| `--parallel` | | Enable parallel KNN search |
+| `--threads` | | Number of threads (0 = auto) |
+| `--memory-index` | | Load index into memory |
+| `--vec-sim` | | Vector similarity threshold [0.0-1.0] |
+| `--range-sim` | | Range similarity threshold [0.0-1.0] |
+| `--help` | `-h` | Show help message |
+
+**Example:**
+```bash
+search_index_test --index data/sift_index \
+  --queries data/siftsmall_query.fvecs \
+  --groundtruth data/siftsmall_groundtruth.ivecs \
+  --num-queries 100 --parallel --memory-index
+```
+
+### add_node
+
+Insert a new data object into an existing index.
+
+```bash
+add_node --index <dir> --key <key> --vector <v1,v2,...>
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--index` | `-i` | Path to index directory (required) |
+| `--key` | `-k` | Key value for the new entry (required) |
+| `--vector` | `-v` | Vector data, comma-separated (required) |
+| `--help` | `-h` | Show help message |
+
+**Example:**
+```bash
+add_node --index data/my_index --key 42 --vector 1.0,2.0,3.0,4.0
+```
+
+### remove_node
+
+Delete a data object from an existing index.
+
+```bash
+remove_node --index <dir> --key <key> [--vector <v1,v2,...>]
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--index` | `-i` | Path to index directory (required) |
+| `--key` | `-k` | Key value to delete (required) |
+| `--vector` | `-v` | Vector to match (optional, for specific deletion) |
+| `--help` | `-h` | Show help message |
+
+**Examples:**
+```bash
+# Remove first entry with key 42
+remove_node --index data/my_index --key 42
+
+# Remove specific entry matching key AND vector
+remove_node --index data/my_index --key 42 --vector 1.0,2.0,3.0,4.0
+```
+
+### read_cache
+
+Inspect cached query results.
+
+```bash
+read_cache --index <dir> [options]
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--index` | `-i` | Path to index directory (required) |
+| `--query-id` | `-q` | Show specific query by ID |
+| `--summary` | `-s` | Show only summary information |
+| `--help` | `-h` | Show help message |
+
+**Examples:**
+```bash
+# List all cached queries
+read_cache --index data/my_index
+
+# Show summary only
+read_cache --index data/my_index --summary
+
+# Show specific query details
+read_cache --index data/my_index --query-id abc123def456
+```
+
+### clear_cache
+
+Clear all cached query results.
+
+```bash
+clear_cache --index <dir> [options]
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--index` | `-i` | Path to index directory (required) |
+| `--confirm` | `-c` | Skip confirmation prompt |
+| `--help` | `-h` | Show help message |
+
+**Examples:**
+```bash
+# Clear with confirmation prompt
+clear_cache --index data/my_index
+
+# Clear without prompt (for scripts)
+clear_cache --index data/my_index --confirm
+```
+
+---
+
+## Usage Examples
+
+### Complete SIFT Workflow
+
+```bash
+# 1. Build index from SIFT base vectors
+./build/src/build_index_fvecs \
+  --input data/siftsmall_base.fvecs \
+  --index data/sift_index
+
+# 2. Run single query with caching
+./build/src/search_index \
+  --index data/sift_index \
+  --min 0 --max 1000 \
+  --vector 132,7,241,89,56,199,18,220,144,63 \
+  --K 10
+
+# 3. Benchmark with groundtruth
+./build/src/search_index_test \
+  --index data/sift_index \
   --queries data/siftsmall_query.fvecs \
   --groundtruth data/siftsmall_groundtruth.ivecs \
   --num-queries 100
+
+# 4. Same query runs ~166x faster on second execution due to caching
 ```
 
-### Cache Management
+### Cache Configuration
 
-#### Disable Caching
-```bash
-# Add --no-cache flag to any command
-./build/Release/search_index --index data/sift_index --min 0 --max 100 --no-cache
-```
-
-#### Configure Cache
 Edit `data/sift_index/config.ini`:
 ```ini
 [cache]
@@ -150,96 +429,6 @@ data/sift_index/
 
 #### NPY Format
 Standard NumPy array format with float32 vectors
-
-#### Binary Format
-```
-[num_points:int32][dimension:int32][data:float32[num_points×dimension]]
-```
-
-## Command Line Reference
-
-### Common Flags
-
-| Flag | Description |
-|------|-------------|
-| `--index, -i` | Path to index directory (required) |
-| `--input` | Input data file path |
-| `--no-cache` | Disable query caching |
-| `--help, -h` | Show usage information |
-
-### Search-Specific Flags
-
-| Flag | Description |
-|------|-------------|
-| `--min, --max` | Range search bounds |
-| `--value, -v` | Exact value search |
-| `--vector` | Query vector (comma-separated) |
-| `--K, -k` | Number of nearest neighbors |
-| `--queries, -q` | Query file for batch processing |
-| `--groundtruth` | Groundtruth file for recall evaluation |
-| `--num-queries` | Limit number of queries to process |
-
-## Configuration
-
-### Build-time Parameters
-
-```cpp
-// Configurable via CMake
-#define BPTREE_PAGE_SIZE 8192      // Page size in bytes
-#define BPTREE_ORDER 4             // B+ tree order
-#define BPTREE_MAX_VECTOR_SIZE 128 // Maximum vector dimension
-```
-
-### Runtime Configuration
-
-`config.ini` in index directory:
-```ini
-[cache]
-cache_enabled = true
-max_cache_size_mb = 100
-
-[index]
-# Future index configuration options
-```
-
-## Examples
-
-### Complete SIFT Workflow
-
-```bash
-# 1. Build index from SIFT base vectors
-./build/Release/build_index_fvecs \
-  --input data/dataset/siftsmall_base.fvecs \
-  --index data/sift_index
-
-# 2. Run single query with caching
-./build/Release/search_index \
-  --index data/sift_index \
-  --min 0 --max 1000 \
-  --vector 132,7,241,89,56,199,18,220,144,63 \
-  --K 10
-
-# 3. Benchmark with groundtruth
-./build/Release/search_index_test \
-  --index data/sift_index \
-  --queries data/dataset/siftsmall_query.fvecs \
-  --groundtruth data/dataset/siftsmall_groundtruth.ivecs \
-  --num-queries 100
-
-# 4. Same query runs ~166x faster on second execution due to caching
-```
-
-### Cache Performance Demonstration
-
-```bash
-# First run (cache miss)
-time ./build/Release/search_index --index data/sift_index --min 0 --max 30 --vector 1,2,3 --K 5
-# Output: Query execution time: 107241 us
-
-# Second run (cache hit)  
-time ./build/Release/search_index --index data/sift_index --min 0 --max 30 --vector 1,2,3 --K 5
-# Output: Cache HIT! Query execution time (from cache): 647 us
-```
 
 ## Technical Details
 
