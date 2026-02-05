@@ -7,6 +7,7 @@
 #include <fstream>
 #include <ctime>
 #include <functional>
+#include <memory>
 #include "DataObject.h"
 
 // Cached neighbor with distance for sorted storage

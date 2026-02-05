@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <fstream>
 #include <cmath>
+#include <cstring>
 
 namespace fs = std::filesystem;
 
