@@ -220,24 +220,28 @@ int main(int argc, char* argv[]) {
             std::cout << "Saved sorted_labels.bin (" << N << " entries)" << std::endl;
         }
 
-        // Insert vectors in sorted order: key = sorted position
+        // Build DataObjects in sorted order and bulk load into B+ tree
+        std::cout << "Building DataObjects in sorted order for bulk load..." << std::endl;
+        Logger::info("Building DataObjects in sorted order for bulk load");
+        std::vector<DataObject> sorted_objects;
+        sorted_objects.reserve(N);
         for (int i = 0; i < N; i++) {
-            int key = i;
-            try {
-                DataObject obj(all_vectors[perm[i]], key);
-                dataTree.insert_data_object(obj);
-            } catch (const std::exception& e) {
-                std::cerr << "ERROR inserting vector " << key << ": " << e.what() << std::endl;
-                Logger::error("ERROR inserting vector " + std::to_string(key) + ": " + e.what());
-                Logger::close();
-                return 1;
-            }
-            vector_count++;
-            if (vector_count % 1000 == 0) {
-                std::cout << "Progress: " << vector_count << " vectors inserted" << std::endl;
-                Logger::info("Progress: " + std::to_string(vector_count) + " vectors inserted");
-            }
+            sorted_objects.emplace_back(std::move(all_vectors[perm[i]]), i);
         }
+        all_vectors.clear();
+        all_vectors.shrink_to_fit();
+
+        std::cout << "Bulk loading " << N << " vectors into B+ tree..." << std::endl;
+        Logger::info("Starting bulk load of " + std::to_string(N) + " vectors");
+        try {
+            dataTree.bulk_load(sorted_objects);
+        } catch (const std::exception& e) {
+            std::cerr << "ERROR during bulk load: " << e.what() << std::endl;
+            Logger::error("ERROR during bulk load: " + std::string(e.what()));
+            Logger::close();
+            return 1;
+        }
+        vector_count = N;
     } else {
         // Standard Mode: Process vectors one by one, key = file order position
         int32_t current_dim;
