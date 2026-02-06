@@ -63,6 +63,10 @@ private:
     uint64_t next_vector_id_;
     std::unordered_map<uint64_t, VectorMetadata> metadata_;
     
+    // Batched flush: flush to disk every N writes instead of every write
+    uint32_t writes_since_flush_ = 0;
+    static constexpr uint32_t FLUSH_INTERVAL = 1000;
+    
     // In-memory vector cache
     std::unordered_map<uint64_t, CachedVector> memory_cache_;
     bool memory_cache_loaded_ = false;

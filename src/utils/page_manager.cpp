@@ -72,6 +72,7 @@ PageManager::~PageManager() {
     }
     if (file_.is_open()) {
         saveHeader();
+        file_.flush();
         file_.close();
     }
 }
@@ -144,7 +145,15 @@ void PageManager::saveHeader() {
     
     file_.seekp(0);
     file_.write(header_page.data(), header_.config.page_size);
-    file_.flush();
+    maybeFlush();
+}
+
+void PageManager::maybeFlush() {
+    writes_since_flush_++;
+    if (writes_since_flush_ >= FLUSH_INTERVAL) {
+        file_.flush();
+        writes_since_flush_ = 0;
+    }
 }
 
 void PageManager::readNode(uint32_t pid, BPlusNode& node) {
@@ -169,7 +178,7 @@ void PageManager::writeNode(uint32_t pid, const BPlusNode& node) {
     // Write to page
     file_.seekp(static_cast<std::streamoff>(pid) * header_.config.page_size);
     file_.write(page_buffer_.data(), header_.config.page_size);
-    file_.flush();
+    maybeFlush();
 }
 
 void PageManager::readRawPage(uint32_t pid, char* buffer, size_t size) {
@@ -260,7 +269,7 @@ void PageManager::loadAllNodes(std::unordered_map<uint32_t, BPlusNode>& nodes, s
 void PageManager::writeRawPage(uint32_t pid, const char* buffer, size_t size) {
     file_.seekp(static_cast<std::streamoff>(pid) * header_.config.page_size);
     file_.write(buffer, size);
-    file_.flush();
+    maybeFlush();
 }
 
 uint32_t PageManager::allocatePage() {

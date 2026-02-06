@@ -106,15 +106,26 @@ void VectorStore::storeVectorInternal(uint64_t vector_id, const std::vector<floa
         file_.seekp(offset);
     }
     
-    // Write: size (4 bytes) + next_id (8 bytes) + vector data
+    // Write: size (4 bytes) + next_id (8 bytes) + vector data (bulk write)
     file_.write(reinterpret_cast<const char*>(&actual_size), sizeof(uint32_t));
     file_.write(reinterpret_cast<const char*>(&next_id), sizeof(uint64_t));
     
-    for (uint32_t i = 0; i < actual_size; i++) {
-        float val = (i < vector.size()) ? vector[i] : 0.0f;
-        file_.write(reinterpret_cast<const char*>(&val), sizeof(float));
+    if (vector.size() >= actual_size) {
+        // Common path: vector has enough data, single bulk write
+        file_.write(reinterpret_cast<const char*>(vector.data()), actual_size * sizeof(float));
+    } else {
+        // Rare path: vector shorter than actual_size, zero-pad
+        std::vector<float> padded(actual_size, 0.0f);
+        std::copy(vector.begin(), vector.end(), padded.begin());
+        file_.write(reinterpret_cast<const char*>(padded.data()), actual_size * sizeof(float));
     }
-    file_.flush();
+    
+    // Batched flush: only flush every FLUSH_INTERVAL writes
+    writes_since_flush_++;
+    if (writes_since_flush_ >= FLUSH_INTERVAL) {
+        file_.flush();
+        writes_since_flush_ = 0;
+    }
     
     metadata_[vector_id] = {offset, actual_size, next_id};
     
@@ -333,11 +344,15 @@ void VectorStore::readMetadata() {
 }
 
 void VectorStore::flush() {
+    if (file_.is_open()) {
+        file_.flush();
+    }
     writeMetadata();
 }
 
 void VectorStore::close() {
     if (file_.is_open()) {
+        file_.flush();
         writeMetadata();
         file_.close();
     }

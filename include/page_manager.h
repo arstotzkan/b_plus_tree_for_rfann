@@ -54,6 +54,11 @@ private:
     std::vector<char> page_buffer_;  // Reusable buffer for serialization
     std::unique_ptr<VectorStore> vector_store_;
     
+    // Batched flush: flush to disk every N writes instead of every write
+    uint32_t writes_since_flush_ = 0;
+    static constexpr uint32_t FLUSH_INTERVAL = 1000;
+    void maybeFlush();
+    
     void initNewFile(const BPTreeConfig& config);
     void loadExistingFile();
 };
