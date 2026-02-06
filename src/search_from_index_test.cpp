@@ -14,6 +14,7 @@
 #include <chrono>
 #include <set>
 #include <cstdint>
+#include <nlohmann/json.hpp>
 
 // Calculate Euclidean distance between two vectors
 double calculate_distance(const std::vector<float>& v1, const std::vector<float>& v2) {
@@ -91,6 +92,54 @@ double calculate_recall(const std::vector<int>& retrieved, const std::vector<int
     return static_cast<double>(hits) / std::min(k, static_cast<int>(gt_set.size()));
 }
 
+// Load sorted labels saved during RFANN index build
+std::vector<int> load_sorted_labels(const std::string& index_dir) {
+    std::vector<int> labels;
+    std::string path = index_dir + "/sorted_labels.bin";
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) return labels;
+    int32_t count;
+    if (!in.read(reinterpret_cast<char*>(&count), sizeof(int32_t))) return labels;
+    labels.resize(count);
+    in.read(reinterpret_cast<char*>(labels.data()), count * sizeof(int32_t));
+    return labels;
+}
+
+// Read qrange JSON: [left0, right0, left1, right1, ...]
+std::vector<std::pair<int, int>> read_qrange_json(const std::string& path, int num_queries) {
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        std::cerr << "Error: Cannot open qrange file: " << path << std::endl;
+        return {};
+    }
+    nlohmann::json j;
+    in >> j;
+    in.close();
+    std::vector<int> raw = j.get<std::vector<int>>();
+    int limit = num_queries * 2;
+    if (static_cast<int>(raw.size()) > limit) raw.resize(limit);
+    std::vector<std::pair<int, int>> ranges;
+    for (size_t i = 0; i + 1 < raw.size(); i += 2) {
+        ranges.push_back({raw[i], raw[i + 1]});
+    }
+    return ranges;
+}
+
+// Binary search: first position where sorted_labels[pos] >= attr_min
+int attr_to_pos_lower(const std::vector<int>& sorted_labels, int attr_min) {
+    auto it = std::lower_bound(sorted_labels.begin(), sorted_labels.end(), attr_min);
+    if (it == sorted_labels.end()) return -1;
+    return static_cast<int>(std::distance(sorted_labels.begin(), it));
+}
+
+// Binary search: last position where sorted_labels[pos] <= attr_max
+int attr_to_pos_upper(const std::vector<int>& sorted_labels, int attr_max) {
+    auto it = std::upper_bound(sorted_labels.begin(), sorted_labels.end(), attr_max);
+    if (it == sorted_labels.begin()) return -1;
+    --it;
+    return static_cast<int>(std::distance(sorted_labels.begin(), it));
+}
+
 void print_usage(const char* program_name) {
     std::cout << "Usage: " << program_name << " --index <index_dir> [options]" << std::endl;
     std::cout << std::endl;
@@ -98,6 +147,9 @@ void print_usage(const char* program_name) {
     std::cout << "  --index, -i      Path to the index directory (required)" << std::endl;
     std::cout << "  --queries, -q    Path to query vectors file (.fvecs format)" << std::endl;
     std::cout << "  --groundtruth    Path to groundtruth file (.ivecs format)" << std::endl;
+    std::cout << "  --qrange-path         Path to query range JSON file for RFANN (optional)" << std::endl;
+    std::cout << "                   Format: [left0, right0, left1, right1, ...] attribute pairs" << std::endl;
+    std::cout << "                   Requires sorted_labels.bin in the index dir (built with --label-path)" << std::endl;
     std::cout << "  --num-queries    Number of queries to run (default: all)" << std::endl;
     std::cout << "  --no-cache       Disable query caching" << std::endl;
     std::cout << "  --parallel       Enable parallel KNN search (auto-detects optimal thread count)" << std::endl;
@@ -119,10 +171,12 @@ int main(int argc, char* argv[]) {
     std::string index_dir;
     std::string queries_path;
     std::string groundtruth_path;
+    std::string qrange_path;
     int num_queries = -1;
     bool has_index = false;
     bool has_queries = false;
     bool has_groundtruth = false;
+    bool has_qrange = false;
     bool cache_enabled = true;
     bool use_parallel = false;
     int num_threads = 0;  // 0 = auto-detect
@@ -143,6 +197,9 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--groundtruth" && i + 1 < argc) {
             groundtruth_path = argv[++i];
             has_groundtruth = true;
+        } else if (arg == "--qrange-path" && i + 1 < argc) {
+            qrange_path = argv[++i];
+            has_qrange = true;
         } else if (arg == "--num-queries" && i + 1 < argc) {
             num_queries = std::atoi(argv[++i]);
         } else if (arg == "--no-cache") {
@@ -238,6 +295,36 @@ int main(int argc, char* argv[]) {
     std::cout << "Memory Index: " << (use_memory_index ? "enabled" : "disabled") << std::endl;
     std::cout << "Range filter (from tree): [" << min_key << ", " << max_key << "]" << std::endl;
 
+    // Load per-query ranges if --qrange provided
+    std::vector<std::pair<int, int>> query_pos_ranges;
+    bool use_per_query_range = false;
+    if (has_qrange) {
+        std::vector<int> sorted_labels = load_sorted_labels(index_dir);
+        if (sorted_labels.empty()) {
+            std::cerr << "Error: Cannot load sorted_labels.bin from index directory. Was the index built with --label-path?" << std::endl;
+            return 1;
+        }
+        std::cout << "Loaded " << sorted_labels.size() << " sorted labels" << std::endl;
+
+        // We don't know query count yet, read a large number and trim later
+        int qrange_limit = (num_queries > 0) ? num_queries : 1000000;
+        std::vector<std::pair<int, int>> attr_ranges = read_qrange_json(qrange_path, qrange_limit);
+        std::cout << "Loaded " << attr_ranges.size() << " query ranges from: " << qrange_path << std::endl;
+
+        // Convert attribute ranges to position ranges
+        for (auto& r : attr_ranges) {
+            int pos_lo = attr_to_pos_lower(sorted_labels, r.first);
+            int pos_hi = attr_to_pos_upper(sorted_labels, r.second);
+            query_pos_ranges.push_back({pos_lo, pos_hi});
+        }
+        std::cout << "Converted attribute ranges to position ranges" << std::endl;
+        for (size_t ex = 0; ex < std::min(static_cast<size_t>(3), query_pos_ranges.size()); ex++) {
+            std::cout << "  Query " << ex << ": attr [" << attr_ranges[ex].first << ", " << attr_ranges[ex].second
+                      << "] -> pos [" << query_pos_ranges[ex].first << ", " << query_pos_ranges[ex].second << "]" << std::endl;
+        }
+        use_per_query_range = true;
+    }
+
     // If no queries file provided, run simple tests
     if (!has_queries) {
         std::cout << std::endl << "No query file provided. Running simple tests..." << std::endl;
@@ -301,7 +388,11 @@ int main(int argc, char* argv[]) {
 
     // Run batch queries
     std::cout << "=== Running " << queries_to_run << " RFANN Queries ===" << std::endl;
-    std::cout << "Configuration: K=" << k_neighbors << " | Range=[" << min_key << "," << max_key << "]" << std::endl;
+    if (use_per_query_range) {
+        std::cout << "Configuration: K=" << k_neighbors << " | Per-query ranges from qrange file" << std::endl;
+    } else {
+        std::cout << "Configuration: K=" << k_neighbors << " | Range=[" << min_key << "," << max_key << "]" << std::endl;
+    }
     std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled");
     if (use_parallel) std::cout << " | Threads: " << (num_threads > 0 ? std::to_string(num_threads) : "auto-detect");
     std::cout << std::endl;
@@ -316,8 +407,22 @@ int main(int argc, char* argv[]) {
     for (int q = 0; q < queries_to_run; q++) {
         const std::vector<float>& query_vec = queries[q];
         std::vector<int> retrieved;
-        
-        std::string query_hash = cache.compute_query_hash(query_vec, min_key, max_key);
+
+        // Determine range for this query
+        int q_min = min_key;
+        int q_max = max_key;
+        if (use_per_query_range && q < static_cast<int>(query_pos_ranges.size())) {
+            q_min = query_pos_ranges[q].first;
+            q_max = query_pos_ranges[q].second;
+            if (q_min < 0 || q_max < 0 || q_min > q_max) {
+                // Skip queries with empty position ranges
+                if ((q + 1) % 10 == 0 || q == queries_to_run - 1)
+                    std::cout << "\rProgress: " << (q + 1) << "/" << queries_to_run << " queries" << std::flush;
+                continue;
+            }
+        }
+
+        std::string query_hash = cache.compute_query_hash(query_vec, q_min, q_max);
         std::string used_similar_query_id;  // Track if we used a similar query's results
         bool cache_hit = false;
         
@@ -325,7 +430,7 @@ int main(int argc, char* argv[]) {
             SimilarityThresholds thresholds(vec_sim_threshold, range_sim_threshold);
             auto cache_start = std::chrono::high_resolution_clock::now();
             SimilarCacheMatch match = cache.find_similar_cached_result(
-                query_vec, min_key, max_key, k_neighbors, thresholds);
+                query_vec, q_min, q_max, k_neighbors, thresholds);
             auto cache_end = std::chrono::high_resolution_clock::now();
             long long cache_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_end - cache_start).count();
             
@@ -356,14 +461,14 @@ int main(int argc, char* argv[]) {
             auto knn_start = std::chrono::high_resolution_clock::now();
             
             std::ostringstream progress_log;
-            progress_log << "Query #" << (q + 1) << " | Starting KNN search (K=" << k_neighbors << ", Range=[" << min_key << "," << max_key << "])";
+            progress_log << "Query #" << (q + 1) << " | Starting KNN search (K=" << k_neighbors << ", Range=[" << q_min << "," << q_max << "])";
             Logger::log_query("KNN_PROGRESS", progress_log.str(), 0.0, 0);
             
             std::vector<DataObject*> knn_results;
             if (use_parallel) {
-                knn_results = dataTree.search_knn_parallel(query_vec, min_key, max_key, k_neighbors, num_threads, use_memory_index);
+                knn_results = dataTree.search_knn_parallel(query_vec, q_min, q_max, k_neighbors, num_threads, use_memory_index);
             } else {
-                knn_results = dataTree.search_knn_optimized(query_vec, min_key, max_key, k_neighbors, use_memory_index);
+                knn_results = dataTree.search_knn_optimized(query_vec, q_min, q_max, k_neighbors, use_memory_index);
             }
             auto knn_end = std::chrono::high_resolution_clock::now();
             auto query_duration = std::chrono::duration_cast<std::chrono::microseconds>(knn_end - knn_start).count();
@@ -371,12 +476,12 @@ int main(int argc, char* argv[]) {
 
             // Log individual query performance with detailed breakdown
             std::ostringstream query_params;
-            query_params << "Query #" << (q + 1) << " | K=" << k_neighbors << " | Range=[" << min_key << "," << max_key << "] | Results: " << knn_results.size() << " | Time: " << (query_duration / 1000.0) << " ms";
+            query_params << "Query #" << (q + 1) << " | K=" << k_neighbors << " | Range=[" << q_min << "," << q_max << "] | Results: " << knn_results.size() << " | Time: " << (query_duration / 1000.0) << " ms";
             Logger::log_query("KNN", query_params.str(), query_duration / 1000.0, knn_results.size());
 
             if (knn_results.empty()) {
                 std::ostringstream empty_log;
-                empty_log << "Query #" << (q + 1) << " | No results found in range [" << min_key << "," << max_key << "]";
+                empty_log << "Query #" << (q + 1) << " | No results found in range [" << q_min << "," << q_max << "]";
                 Logger::log_query("KNN_PROGRESS", empty_log.str(), 0.0, 0);
                 continue;
             }
@@ -402,7 +507,7 @@ int main(int argc, char* argv[]) {
             // Store in cache (pass used_similar_query_id to skip caching if we used similar results)
             auto cache_store_start = std::chrono::high_resolution_clock::now();
             if (cache_enabled && !results_for_cache.empty()) {
-                cache.store_result(query_hash, query_vec, min_key, max_key, k_neighbors, results_for_cache, used_similar_query_id);
+                cache.store_result(query_hash, query_vec, q_min, q_max, k_neighbors, results_for_cache, used_similar_query_id);
             }
             auto cache_store_end = std::chrono::high_resolution_clock::now();
             auto cache_store_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_store_end - cache_store_start).count();

@@ -9,6 +9,9 @@
 #include <vector>
 #include <cstdint>
 #include <chrono>
+#include <numeric>
+#include <algorithm>
+#include <nlohmann/json.hpp>
 
 void print_usage(const char* program_name) {
     std::cout << "Usage: " << program_name << " --input <fvecs_file> --index <index_dir> [options]" << std::endl;
@@ -19,6 +22,10 @@ void print_usage(const char* program_name) {
     std::cout << "  --order                  B+ tree order (default: auto-calculated based on vector dimension)" << std::endl;
     std::cout << "  --batch-size             Number of vectors to process in each batch (default: 10)" << std::endl;
     std::cout << "  --max-cache-size         Maximum cache size in MB (default: 100)" << std::endl;
+    std::cout << "  --label-path                  Path to label JSON file for RFANN mode (optional)" << std::endl;
+    std::cout << "                           Format: [42, 17, 99, ...] one integer per vector" << std::endl;
+    std::cout << "                           When set, vectors are sorted by attribute and inserted" << std::endl;
+    std::cout << "                           by sorted position. Saves sorted_labels.bin for query time." << std::endl;
     std::cout << std::endl;
     std::cout << "B+ Tree Configuration:" << std::endl;
     std::cout << "  The index automatically detects vector dimension from the input file and" << std::endl;
@@ -37,8 +44,10 @@ int main(int argc, char* argv[]) {
     std::string index_dir;
     int batch_size = 10;  // Reduced default batch size for memory efficiency
     int custom_order = 0;  // 0 = auto-calculate
+    std::string label_path;
     bool has_input = false;
     bool has_index = false;
+    bool has_label = false;
     // Model B: Vectors are always stored separately (no inline storage option)
     size_t max_cache_size_mb = 100;
 
@@ -61,6 +70,9 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--max-cache-size" && i + 1 < argc) {
             max_cache_size_mb = std::stoull(argv[++i]);
             if (max_cache_size_mb == 0) max_cache_size_mb = 100;
+        } else if (arg == "--label-path" && i + 1 < argc) {
+            label_path = argv[++i];
+            has_label = true;
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -148,68 +160,140 @@ int main(int argc, char* argv[]) {
     DiskBPlusTree dataTree(idx_dir.get_index_file_path(), config);
 
     int vector_count = 0;
-    
-    // Process vectors one by one for maximum memory efficiency
-    int32_t current_dim;
-    while (file.read(reinterpret_cast<char*>(&current_dim), sizeof(int32_t))) {
-        if (current_dim != dimension) {
-            std::cerr << "Warning: Inconsistent dimension at vector " << vector_count 
-                      << " (expected " << dimension << ", got " << current_dim << ")" << std::endl;
-        }
-        
-        // Read the vector data directly into a temporary vector
-        std::vector<float> vec(current_dim);
-        if (!file.read(reinterpret_cast<char*>(vec.data()), current_dim * sizeof(float))) {
-            std::cerr << "Error: Failed to read vector " << vector_count << std::endl;
-            break;
-        }
-        
-        // Use vector index as the key (for RFANN, this represents the sorted attribute)
-        int key = vector_count;
-        
-        // Insert immediately and clean up
-        try {
-            DataObject obj(vec, key);
-            dataTree.insert_data_object(obj);
-        } catch (const std::exception& e) {
-            std::string error_msg = "ERROR inserting vector " + std::to_string(key) + ": " + e.what();
-            std::cerr << error_msg << std::endl;
-            Logger::error(error_msg);
-            file.close();
-            Logger::close();
-            return 1;
-        } catch (...) {
-            std::string error_msg = "UNKNOWN ERROR inserting vector " + std::to_string(key);
-            std::cerr << error_msg << std::endl;
-            Logger::error(error_msg);
-            file.close();
-            Logger::close();
-            return 1;
-        }
-        
-        vector_count++;
-        
-        // Progress reporting every 1000 vectors
-        if (vector_count % 1000 == 0) {
-            std::cout << "Progress: " << vector_count << " vectors inserted" << std::endl;
-            Logger::info("Progress: " + std::to_string(vector_count) + " vectors inserted");
-        }
-        
-        // Detailed logging every 10000 vectors
-        if (vector_count % 10000 == 0) {
-            auto current_time = std::chrono::high_resolution_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time);
-            double rate = vector_count / (elapsed.count() / 1000.0);
-            Logger::log_performance("Batch insertion", elapsed.count(), 
-                std::to_string(vector_count) + " vectors, " + std::to_string(rate) + " vectors/sec");
-        }
-        
-        // Clear vector to free memory immediately
-        vec.clear();
-        vec.shrink_to_fit();
-    }
 
-    file.close();
+    if (has_label) {
+        // RFANN Mode: Load labels, load all vectors, sort by label, insert by sorted position
+        std::cout << "RFANN Mode: Sorting vectors by label from " << label_path << std::endl;
+        Logger::info("RFANN Mode: reading labels from " + label_path);
+
+        // Read label JSON: [42, 17, 99, ...]
+        std::vector<int> labels;
+        {
+            std::ifstream label_file(label_path);
+            if (!label_file.is_open()) {
+                std::cerr << "Error: Cannot open label file: " << label_path << std::endl;
+                file.close();
+                Logger::close();
+                return 1;
+            }
+            nlohmann::json j;
+            label_file >> j;
+            label_file.close();
+            labels = j.get<std::vector<int>>();
+        }
+        std::cout << "Loaded " << labels.size() << " labels" << std::endl;
+
+        // Load all vectors into memory
+        std::vector<std::vector<float>> all_vectors;
+        int32_t current_dim;
+        while (file.read(reinterpret_cast<char*>(&current_dim), sizeof(int32_t))) {
+            std::vector<float> vec(current_dim);
+            if (!file.read(reinterpret_cast<char*>(vec.data()), current_dim * sizeof(float))) break;
+            all_vectors.push_back(std::move(vec));
+        }
+        file.close();
+        std::cout << "Loaded " << all_vectors.size() << " vectors into memory" << std::endl;
+
+        if (labels.size() != all_vectors.size()) {
+            std::cerr << "Error: Label count (" << labels.size() << ") != vector count (" << all_vectors.size() << ")" << std::endl;
+            Logger::close();
+            return 1;
+        }
+
+        int N = static_cast<int>(all_vectors.size());
+
+        // Sort permutation by label value
+        std::vector<int> perm(N);
+        std::iota(perm.begin(), perm.end(), 0);
+        std::sort(perm.begin(), perm.end(), [&](int a, int b) { return labels[a] < labels[b]; });
+
+        // Build sorted labels array and save to sorted_labels.bin
+        std::vector<int> sorted_labels(N);
+        for (int i = 0; i < N; i++) sorted_labels[i] = labels[perm[i]];
+        {
+            std::string sl_path = index_dir + "/sorted_labels.bin";
+            std::ofstream sl_out(sl_path, std::ios::binary);
+            int32_t count = static_cast<int32_t>(N);
+            sl_out.write(reinterpret_cast<const char*>(&count), sizeof(int32_t));
+            sl_out.write(reinterpret_cast<const char*>(sorted_labels.data()), N * sizeof(int32_t));
+            sl_out.close();
+            std::cout << "Saved sorted_labels.bin (" << N << " entries)" << std::endl;
+        }
+
+        // Insert vectors in sorted order: key = sorted position
+        for (int i = 0; i < N; i++) {
+            int key = i;
+            try {
+                DataObject obj(all_vectors[perm[i]], key);
+                dataTree.insert_data_object(obj);
+            } catch (const std::exception& e) {
+                std::cerr << "ERROR inserting vector " << key << ": " << e.what() << std::endl;
+                Logger::error("ERROR inserting vector " + std::to_string(key) + ": " + e.what());
+                Logger::close();
+                return 1;
+            }
+            vector_count++;
+            if (vector_count % 1000 == 0) {
+                std::cout << "Progress: " << vector_count << " vectors inserted" << std::endl;
+                Logger::info("Progress: " + std::to_string(vector_count) + " vectors inserted");
+            }
+        }
+    } else {
+        // Standard Mode: Process vectors one by one, key = file order position
+        int32_t current_dim;
+        while (file.read(reinterpret_cast<char*>(&current_dim), sizeof(int32_t))) {
+            if (current_dim != dimension) {
+                std::cerr << "Warning: Inconsistent dimension at vector " << vector_count 
+                          << " (expected " << dimension << ", got " << current_dim << ")" << std::endl;
+            }
+            
+            std::vector<float> vec(current_dim);
+            if (!file.read(reinterpret_cast<char*>(vec.data()), current_dim * sizeof(float))) {
+                std::cerr << "Error: Failed to read vector " << vector_count << std::endl;
+                break;
+            }
+            
+            int key = vector_count;
+            
+            try {
+                DataObject obj(vec, key);
+                dataTree.insert_data_object(obj);
+            } catch (const std::exception& e) {
+                std::string error_msg = "ERROR inserting vector " + std::to_string(key) + ": " + e.what();
+                std::cerr << error_msg << std::endl;
+                Logger::error(error_msg);
+                file.close();
+                Logger::close();
+                return 1;
+            } catch (...) {
+                std::string error_msg = "UNKNOWN ERROR inserting vector " + std::to_string(key);
+                std::cerr << error_msg << std::endl;
+                Logger::error(error_msg);
+                file.close();
+                Logger::close();
+                return 1;
+            }
+            
+            vector_count++;
+            
+            if (vector_count % 1000 == 0) {
+                std::cout << "Progress: " << vector_count << " vectors inserted" << std::endl;
+                Logger::info("Progress: " + std::to_string(vector_count) + " vectors inserted");
+            }
+            
+            if (vector_count % 10000 == 0) {
+                auto current_time = std::chrono::high_resolution_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time);
+                double rate = vector_count / (elapsed.count() / 1000.0);
+                Logger::log_performance("Batch insertion", elapsed.count(), 
+                    std::to_string(vector_count) + " vectors, " + std::to_string(rate) + " vectors/sec");
+            }
+            
+            vec.clear();
+            vec.shrink_to_fit();
+        }
+        file.close();
+    }
     Logger::info("Finished reading input file");
 
     // End timing
