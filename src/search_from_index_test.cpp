@@ -92,19 +92,6 @@ double calculate_recall(const std::vector<int>& retrieved, const std::vector<int
     return static_cast<double>(hits) / std::min(k, static_cast<int>(gt_set.size()));
 }
 
-// Load sorted labels saved during RFANN index build
-std::vector<int> load_sorted_labels(const std::string& index_dir) {
-    std::vector<int> labels;
-    std::string path = index_dir + "/sorted_labels.bin";
-    std::ifstream in(path, std::ios::binary);
-    if (!in.is_open()) return labels;
-    int32_t count;
-    if (!in.read(reinterpret_cast<char*>(&count), sizeof(int32_t))) return labels;
-    labels.resize(count);
-    in.read(reinterpret_cast<char*>(labels.data()), count * sizeof(int32_t));
-    return labels;
-}
-
 // Read qrange JSON: [left0, right0, left1, right1, ...]
 std::vector<std::pair<int, int>> read_qrange_json(const std::string& path, int num_queries) {
     std::ifstream in(path);
@@ -125,21 +112,6 @@ std::vector<std::pair<int, int>> read_qrange_json(const std::string& path, int n
     return ranges;
 }
 
-// Binary search: first position where sorted_labels[pos] >= attr_min
-int attr_to_pos_lower(const std::vector<int>& sorted_labels, int attr_min) {
-    auto it = std::lower_bound(sorted_labels.begin(), sorted_labels.end(), attr_min);
-    if (it == sorted_labels.end()) return -1;
-    return static_cast<int>(std::distance(sorted_labels.begin(), it));
-}
-
-// Binary search: last position where sorted_labels[pos] <= attr_max
-int attr_to_pos_upper(const std::vector<int>& sorted_labels, int attr_max) {
-    auto it = std::upper_bound(sorted_labels.begin(), sorted_labels.end(), attr_max);
-    if (it == sorted_labels.begin()) return -1;
-    --it;
-    return static_cast<int>(std::distance(sorted_labels.begin(), it));
-}
-
 void print_usage(const char* program_name) {
     std::cout << "Usage: " << program_name << " --index <index_dir> [options]" << std::endl;
     std::cout << std::endl;
@@ -149,7 +121,7 @@ void print_usage(const char* program_name) {
     std::cout << "  --groundtruth    Path to groundtruth file (.ivecs format)" << std::endl;
     std::cout << "  --qrange-path         Path to query range JSON file for RFANN (optional)" << std::endl;
     std::cout << "                   Format: [left0, right0, left1, right1, ...] attribute pairs" << std::endl;
-    std::cout << "                   Requires sorted_labels.bin in the index dir (built with --label-path)" << std::endl;
+    std::cout << "                   Used directly as B+ tree key ranges (index must be built with --label-path)" << std::endl;
     std::cout << "  --num-queries    Number of queries to run (default: all)" << std::endl;
     std::cout << "  --no-cache       Disable query caching" << std::endl;
     std::cout << "  --parallel       Enable parallel KNN search (auto-detects optimal thread count)" << std::endl;
@@ -295,32 +267,15 @@ int main(int argc, char* argv[]) {
     std::cout << "Memory Index: " << (use_memory_index ? "enabled" : "disabled") << std::endl;
     std::cout << "Range filter (from tree): [" << min_key << ", " << max_key << "]" << std::endl;
 
-    // Load per-query ranges if --qrange provided
-    std::vector<std::pair<int, int>> query_pos_ranges;
+    // Load per-query attribute ranges if --qrange provided
+    std::vector<std::pair<int, int>> query_ranges;
     bool use_per_query_range = false;
     if (has_qrange) {
-        std::vector<int> sorted_labels = load_sorted_labels(index_dir);
-        if (sorted_labels.empty()) {
-            std::cerr << "Error: Cannot load sorted_labels.bin from index directory. Was the index built with --label-path?" << std::endl;
-            return 1;
-        }
-        std::cout << "Loaded " << sorted_labels.size() << " sorted labels" << std::endl;
-
-        // We don't know query count yet, read a large number and trim later
         int qrange_limit = (num_queries > 0) ? num_queries : 1000000;
-        std::vector<std::pair<int, int>> attr_ranges = read_qrange_json(qrange_path, qrange_limit);
-        std::cout << "Loaded " << attr_ranges.size() << " query ranges from: " << qrange_path << std::endl;
-
-        // Convert attribute ranges to position ranges
-        for (auto& r : attr_ranges) {
-            int pos_lo = attr_to_pos_lower(sorted_labels, r.first);
-            int pos_hi = attr_to_pos_upper(sorted_labels, r.second);
-            query_pos_ranges.push_back({pos_lo, pos_hi});
-        }
-        std::cout << "Converted attribute ranges to position ranges" << std::endl;
-        for (size_t ex = 0; ex < std::min(static_cast<size_t>(3), query_pos_ranges.size()); ex++) {
-            std::cout << "  Query " << ex << ": attr [" << attr_ranges[ex].first << ", " << attr_ranges[ex].second
-                      << "] -> pos [" << query_pos_ranges[ex].first << ", " << query_pos_ranges[ex].second << "]" << std::endl;
+        query_ranges = read_qrange_json(qrange_path, qrange_limit);
+        std::cout << "Loaded " << query_ranges.size() << " query ranges from: " << qrange_path << std::endl;
+        for (size_t ex = 0; ex < std::min(static_cast<size_t>(3), query_ranges.size()); ex++) {
+            std::cout << "  Query " << ex << ": range [" << query_ranges[ex].first << ", " << query_ranges[ex].second << "]" << std::endl;
         }
         use_per_query_range = true;
     }
@@ -411,11 +366,11 @@ int main(int argc, char* argv[]) {
         // Determine range for this query
         int q_min = min_key;
         int q_max = max_key;
-        if (use_per_query_range && q < static_cast<int>(query_pos_ranges.size())) {
-            q_min = query_pos_ranges[q].first;
-            q_max = query_pos_ranges[q].second;
-            if (q_min < 0 || q_max < 0 || q_min > q_max) {
-                // Skip queries with empty position ranges
+        if (use_per_query_range && q < static_cast<int>(query_ranges.size())) {
+            q_min = query_ranges[q].first;
+            q_max = query_ranges[q].second;
+            if (q_min > q_max) {
+                // Skip queries with invalid ranges
                 if ((q + 1) % 10 == 0 || q == queries_to_run - 1)
                     std::cout << "\rProgress: " << (q + 1) << "/" << queries_to_run << " queries" << std::flush;
                 continue;

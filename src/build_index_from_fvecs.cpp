@@ -24,8 +24,8 @@ void print_usage(const char* program_name) {
     std::cout << "  --max-cache-size         Maximum cache size in MB (default: 100)" << std::endl;
     std::cout << "  --label-path                  Path to label JSON file for RFANN mode (optional)" << std::endl;
     std::cout << "                           Format: [42, 17, 99, ...] one integer per vector" << std::endl;
-    std::cout << "                           When set, vectors are sorted by attribute and inserted" << std::endl;
-    std::cout << "                           by sorted position. Saves sorted_labels.bin for query time." << std::endl;
+    std::cout << "                           When set, vectors are sorted by attribute and the label" << std::endl;
+    std::cout << "                           value is used as the B+ tree key for direct range search." << std::endl;
     std::cout << std::endl;
     std::cout << "B+ Tree Configuration:" << std::endl;
     std::cout << "  The index automatically detects vector dimension from the input file and" << std::endl;
@@ -207,26 +207,14 @@ int main(int argc, char* argv[]) {
         std::iota(perm.begin(), perm.end(), 0);
         std::sort(perm.begin(), perm.end(), [&](int a, int b) { return labels[a] < labels[b]; });
 
-        // Build sorted labels array and save to sorted_labels.bin
-        std::vector<int> sorted_labels(N);
-        for (int i = 0; i < N; i++) sorted_labels[i] = labels[perm[i]];
-        {
-            std::string sl_path = index_dir + "/sorted_labels.bin";
-            std::ofstream sl_out(sl_path, std::ios::binary);
-            int32_t count = static_cast<int32_t>(N);
-            sl_out.write(reinterpret_cast<const char*>(&count), sizeof(int32_t));
-            sl_out.write(reinterpret_cast<const char*>(sorted_labels.data()), N * sizeof(int32_t));
-            sl_out.close();
-            std::cout << "Saved sorted_labels.bin (" << N << " entries)" << std::endl;
-        }
-
         // Build DataObjects in sorted order and bulk load into B+ tree
+        // Key = label value (not positional index), so the tree can be searched by attribute range directly
         std::cout << "Building DataObjects in sorted order for bulk load..." << std::endl;
         Logger::info("Building DataObjects in sorted order for bulk load");
         std::vector<DataObject> sorted_objects;
         sorted_objects.reserve(N);
         for (int i = 0; i < N; i++) {
-            sorted_objects.emplace_back(std::move(all_vectors[perm[i]]), i);
+            sorted_objects.emplace_back(std::move(all_vectors[perm[i]]), labels[perm[i]]);
         }
         all_vectors.clear();
         all_vectors.shrink_to_fit();
