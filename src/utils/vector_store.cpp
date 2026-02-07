@@ -98,7 +98,7 @@ void VectorStore::loadExistingFile() {
 }
 
 void VectorStore::storeVectorInternal(uint64_t vector_id, const std::vector<float>& vector, 
-                                      uint32_t actual_size, uint64_t next_id) {
+                                      uint32_t actual_size, uint64_t next_id, int32_t original_id) {
     if (actual_size > max_vector_size_) {
         actual_size = max_vector_size_;
     }
@@ -107,9 +107,10 @@ void VectorStore::storeVectorInternal(uint64_t vector_id, const std::vector<floa
     uint64_t offset = write_pos_;
     file_.seekp(offset);
     
-    // Write: size (4 bytes) + next_id (8 bytes) + vector data (bulk write)
+    // Write: size (4 bytes) + next_id (8 bytes) + original_id (4 bytes) + vector data (bulk write)
     file_.write(reinterpret_cast<const char*>(&actual_size), sizeof(uint32_t));
     file_.write(reinterpret_cast<const char*>(&next_id), sizeof(uint64_t));
+    file_.write(reinterpret_cast<const char*>(&original_id), sizeof(int32_t));
     
     if (vector.size() >= actual_size) {
         // Common path: vector has enough data, single bulk write
@@ -121,8 +122,8 @@ void VectorStore::storeVectorInternal(uint64_t vector_id, const std::vector<floa
         file_.write(reinterpret_cast<const char*>(padded.data()), actual_size * sizeof(float));
     }
     
-    // Advance tracked write position: header (4+8) + vector data
-    write_pos_ = offset + sizeof(uint32_t) + sizeof(uint64_t) + actual_size * sizeof(float);
+    // Advance tracked write position: header (4+8+4) + vector data
+    write_pos_ = offset + sizeof(uint32_t) + sizeof(uint64_t) + sizeof(int32_t) + actual_size * sizeof(float);
     
     // Batched flush: only flush every FLUSH_INTERVAL writes
     writes_since_flush_++;
@@ -131,27 +132,32 @@ void VectorStore::storeVectorInternal(uint64_t vector_id, const std::vector<floa
         writes_since_flush_ = 0;
     }
     
-    metadata_[vector_id] = {offset, actual_size, next_id};
+    metadata_[vector_id] = {offset, actual_size, next_id, original_id};
     
     if (vector_id >= next_vector_id_) {
         next_vector_id_ = vector_id + 1;
     }
 }
 
-uint64_t VectorStore::storeVector(const std::vector<float>& vector, uint32_t actual_size) {
+uint64_t VectorStore::storeVector(const std::vector<float>& vector, uint32_t actual_size, int32_t original_id) {
     uint64_t vector_id = next_vector_id_++;
-    storeVectorInternal(vector_id, vector, actual_size, 0);  // 0 = no next
+    storeVectorInternal(vector_id, vector, actual_size, 0, original_id);  // 0 = no next
     return vector_id;
 }
 
-uint64_t VectorStore::appendVectorToList(uint64_t first_vector_id, const std::vector<float>& vector, uint32_t actual_size) {
+uint64_t VectorStore::appendVectorToList(uint64_t first_vector_id, const std::vector<float>& vector, uint32_t actual_size, int32_t original_id) {
     // Store new vector, pointing to the old first
     uint64_t new_id = next_vector_id_++;
-    storeVectorInternal(new_id, vector, actual_size, first_vector_id);
+    storeVectorInternal(new_id, vector, actual_size, first_vector_id, original_id);
     return new_id;  // New vector becomes the head of the list
 }
 
 void VectorStore::retrieveVector(uint64_t vector_id, std::vector<float>& vector, uint32_t& actual_size) {
+    int32_t dummy_id;
+    retrieveVector(vector_id, vector, actual_size, dummy_id);
+}
+
+void VectorStore::retrieveVector(uint64_t vector_id, std::vector<float>& vector, uint32_t& actual_size, int32_t& original_id) {
     if (vector_id == 0) {
         throw std::runtime_error("Invalid vector ID: 0");
     }
@@ -162,6 +168,7 @@ void VectorStore::retrieveVector(uint64_t vector_id, std::vector<float>& vector,
         if (cache_it != memory_cache_.end()) {
             const CachedVector& cached = cache_it->second;
             actual_size = cached.size;
+            original_id = cached.original_id;
             vector = cached.data;
             return;
         }
@@ -175,6 +182,7 @@ void VectorStore::retrieveVector(uint64_t vector_id, std::vector<float>& vector,
     
     const VectorMetadata& meta = it->second;
     actual_size = meta.size;
+    original_id = meta.original_id;
     
     vector.resize(actual_size);
     
@@ -183,20 +191,30 @@ void VectorStore::retrieveVector(uint64_t vector_id, std::vector<float>& vector,
     uint32_t stored_size;
     file_.read(reinterpret_cast<char*>(&stored_size), sizeof(uint32_t));
     
-    // Skip next_id (8 bytes)
-    file_.seekg(sizeof(uint64_t), std::ios::cur);
+    // Skip next_id (8 bytes) + original_id (4 bytes)
+    file_.seekg(sizeof(uint64_t) + sizeof(int32_t), std::ios::cur);
     
-    // Bulk read entire vector at once instead of per-float reads
+    // Bulk read entire vector at once
     file_.read(reinterpret_cast<char*>(vector.data()), actual_size * sizeof(float));
 }
 
 void VectorStore::retrieveVectorList(uint64_t first_vector_id, uint32_t count,
                                      std::vector<std::vector<float>>& vectors,
                                      std::vector<uint32_t>& sizes) {
+    std::vector<int32_t> dummy_ids;
+    retrieveVectorList(first_vector_id, count, vectors, sizes, dummy_ids);
+}
+
+void VectorStore::retrieveVectorList(uint64_t first_vector_id, uint32_t count,
+                                     std::vector<std::vector<float>>& vectors,
+                                     std::vector<uint32_t>& sizes,
+                                     std::vector<int32_t>& original_ids) {
     vectors.clear();
     sizes.clear();
+    original_ids.clear();
     vectors.reserve(count);
     sizes.reserve(count);
+    original_ids.reserve(count);
     
     uint64_t current_id = first_vector_id;
     uint32_t retrieved = 0;
@@ -209,6 +227,7 @@ void VectorStore::retrieveVectorList(uint64_t first_vector_id, uint32_t count,
                 const CachedVector& cached = cache_it->second;
                 vectors.push_back(cached.data);
                 sizes.push_back(cached.size);
+                original_ids.push_back(cached.original_id);
                 current_id = cached.next_id;
                 retrieved++;
                 continue;
@@ -232,10 +251,14 @@ void VectorStore::retrieveVectorList(uint64_t first_vector_id, uint32_t count,
         uint64_t next_id;
         file_.read(reinterpret_cast<char*>(&next_id), sizeof(uint64_t));
         
+        int32_t orig_id;
+        file_.read(reinterpret_cast<char*>(&orig_id), sizeof(int32_t));
+        
         file_.read(reinterpret_cast<char*>(vec.data()), meta.size * sizeof(float));
         
         vectors.push_back(std::move(vec));
         sizes.push_back(meta.size);
+        original_ids.push_back(orig_id);
         
         current_id = next_id;
         retrieved++;
@@ -319,6 +342,7 @@ void VectorStore::writeMetadata() {
         meta_file.write(reinterpret_cast<const char*>(&meta.offset), sizeof(uint64_t));
         meta_file.write(reinterpret_cast<const char*>(&meta.size), sizeof(uint32_t));
         meta_file.write(reinterpret_cast<const char*>(&meta.next_id), sizeof(uint64_t));
+        meta_file.write(reinterpret_cast<const char*>(&meta.original_id), sizeof(int32_t));
     }
     meta_file.close();
 }
@@ -340,6 +364,7 @@ void VectorStore::readMetadata() {
         meta_file.read(reinterpret_cast<char*>(&meta.offset), sizeof(uint64_t));
         meta_file.read(reinterpret_cast<char*>(&meta.size), sizeof(uint32_t));
         meta_file.read(reinterpret_cast<char*>(&meta.next_id), sizeof(uint64_t));
+        meta_file.read(reinterpret_cast<char*>(&meta.original_id), sizeof(int32_t));
         
         metadata_[id] = meta;
     }
@@ -427,6 +452,7 @@ bool VectorStore::loadAllVectorsIntoMemory(size_t max_memory_mb) {
         CachedVector cached;
         cached.size = meta.size;
         cached.next_id = meta.next_id;
+        cached.original_id = meta.original_id;
         cached.data.resize(meta.size);
         
         // Seek to vector data
@@ -436,8 +462,8 @@ bool VectorStore::loadAllVectorsIntoMemory(size_t max_memory_mb) {
             return false;
         }
         
-        // Skip stored_size (4 bytes) and next_id (8 bytes) - we have them in metadata
-        file_.seekg(sizeof(uint32_t) + sizeof(uint64_t), std::ios::cur);
+        // Skip stored_size (4 bytes) + next_id (8 bytes) + original_id (4 bytes) - we have them in metadata
+        file_.seekg(sizeof(uint32_t) + sizeof(uint64_t) + sizeof(int32_t), std::ios::cur);
         
         // Bulk read entire vector at once
         file_.read(reinterpret_cast<char*>(cached.data.data()), meta.size * sizeof(float));

@@ -193,6 +193,7 @@ int main(int argc, char* argv[]) {
             if (!file.read(reinterpret_cast<char*>(vec.data()), current_dim * sizeof(float))) break;
             if (vec_idx < labels.size()) {
                 objects.emplace_back(std::move(vec), labels[vec_idx]);
+                objects.back().set_id(static_cast<int32_t>(vec_idx));
             }
             vec_idx++;
         }
@@ -279,6 +280,7 @@ int main(int argc, char* argv[]) {
             
             try {
                 DataObject obj(vec, key);
+                obj.set_id(static_cast<int32_t>(vector_count));
                 dataTree.insert_data_object(obj);
             } catch (const std::exception& e) {
                 std::string error_msg = "ERROR inserting vector " + std::to_string(key) + ": " + e.what();

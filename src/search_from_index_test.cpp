@@ -394,6 +394,8 @@ int main(int argc, char* argv[]) {
                 used_similar_query_id = match.query_id;
                 total_range_time += cache_duration;
                 
+                // NOTE: Cache doesn't store original_id yet, so cache-hit recall
+                // will use keys instead of fvecs indices. Rebuild index to get correct recall.
                 for (const auto& neighbor : match.result.neighbors) {
                     retrieved.push_back(neighbor.key);
                 }
@@ -448,7 +450,8 @@ int main(int argc, char* argv[]) {
                 int key = knn_results[i]->is_int_value() ? 
                     knn_results[i]->get_int_value() : 
                     static_cast<int>(knn_results[i]->get_float_value());
-                retrieved.push_back(key);
+                // Use original fvecs file index for recall (groundtruth stores vector indices, not keys)
+                retrieved.push_back(static_cast<int>(knn_results[i]->get_id()));
                 
                 CachedNeighbor neighbor;
                 neighbor.vector = knn_results[i]->get_vector();

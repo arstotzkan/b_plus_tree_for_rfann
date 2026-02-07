@@ -6,6 +6,7 @@ class DataObject {
 private:
     std::vector<float> data_vector;  // Changed to float for SIFT vectors
     std::variant<int, float> numeric_value;
+    int32_t id_ = -1;  // Original index in the fvecs file (-1 = unset)
 
 public:
     // Constructors
@@ -33,11 +34,13 @@ public:
     int get_int_value() const;
     float get_float_value() const;
     bool is_int_value() const;
+    int32_t get_id() const { return id_; }
 
     // Setters
     void set_vector_size(size_t new_size);
     void set_int_value(int value);
     void set_float_value(float value);
+    void set_id(int32_t id) { id_ = id; }
 
     // Vector operations
     void set_vector_element(size_t index, float value);

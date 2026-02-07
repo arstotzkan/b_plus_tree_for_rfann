@@ -153,6 +153,7 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
     uint32_t order = pm->getOrder();
     const std::vector<float>& vec = obj.get_vector();
     uint32_t vec_size = static_cast<uint32_t>(vec.size());
+    int32_t orig_id = obj.get_id();
 
     if (rootPid == INVALID_PAGE) {
         // Create first leaf node as root
@@ -163,7 +164,7 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
         root.next = INVALID_PAGE;
         
         // Store vector and get its ID
-        uint64_t vector_id = pm->getVectorStore()->storeVector(vec, vec_size);
+        uint64_t vector_id = pm->getVectorStore()->storeVector(vec, vec_size, orig_id);
         root.vector_list_ids[0] = vector_id;
         root.vector_counts[0] = 1;
 
@@ -208,7 +209,7 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
     if (existingIdx >= 0) {
         // Key exists - append vector to the existing list
         uint64_t old_first_id = node.vector_list_ids[existingIdx];
-        uint64_t new_first_id = pm->getVectorStore()->appendVectorToList(old_first_id, vec, vec_size);
+        uint64_t new_first_id = pm->getVectorStore()->appendVectorToList(old_first_id, vec, vec_size, orig_id);
         node.vector_list_ids[existingIdx] = new_first_id;
         node.vector_counts[existingIdx]++;
         write(pid, node);
@@ -226,7 +227,7 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
     }
     
     // Insert new key with its first vector
-    uint64_t vector_id = pm->getVectorStore()->storeVector(vec, vec_size);
+    uint64_t vector_id = pm->getVectorStore()->storeVector(vec, vec_size, orig_id);
     node.keys[i + 1] = key;
     node.vector_list_ids[i + 1] = vector_id;
     node.vector_counts[i + 1] = 1;
@@ -416,11 +417,12 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
             for (const DataObject* obj : group.objects) {
                 const std::vector<float>& vec = obj->get_vector();
                 uint32_t vec_size = static_cast<uint32_t>(vec.size());
+                int32_t orig_id = obj->get_id();
                 
                 if (first_vector_id == 0) {
-                    first_vector_id = pm->getVectorStore()->storeVector(vec, vec_size);
+                    first_vector_id = pm->getVectorStore()->storeVector(vec, vec_size, orig_id);
                 } else {
-                    first_vector_id = pm->getVectorStore()->appendVectorToList(first_vector_id, vec, vec_size);
+                    first_vector_id = pm->getVectorStore()->appendVectorToList(first_vector_id, vec, vec_size, orig_id);
                 }
                 vector_count++;
             }
@@ -548,8 +550,10 @@ DataObject* DiskBPlusTree::search_data_object(const DataObject& obj, bool use_me
         if (nodePtr->keys[i] == key) {
             std::vector<float> vec;
             uint32_t actual_size;
-            pm->getVectorStore()->retrieveVector(nodePtr->vector_list_ids[i], vec, actual_size);
+            int32_t original_id;
+            pm->getVectorStore()->retrieveVector(nodePtr->vector_list_ids[i], vec, actual_size, original_id);
             DataObject* result = new DataObject(vec, key);
+            result->set_id(original_id);
             return result;
         }
     }
@@ -585,8 +589,10 @@ DataObject* DiskBPlusTree::search_data_object(int key, bool use_memory_index) {
         if (nodePtr->keys[i] == key) {
             std::vector<float> vec;
             uint32_t actual_size;
-            pm->getVectorStore()->retrieveVector(nodePtr->vector_list_ids[i], vec, actual_size);
+            int32_t original_id;
+            pm->getVectorStore()->retrieveVector(nodePtr->vector_list_ids[i], vec, actual_size, original_id);
             DataObject* result = new DataObject(vec, key);
+            result->set_id(original_id);
             return result;
         }
         if (nodePtr->keys[i] > key) {
@@ -1157,14 +1163,16 @@ std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key, b
                 // Model B: Retrieve ALL vectors for this key
                 std::vector<std::vector<float>> vectors;
                 std::vector<uint32_t> sizes;
+                std::vector<int32_t> original_ids;
                 pm->getVectorStore()->retrieveVectorList(
                     leafPtr->vector_list_ids[i], 
                     leafPtr->vector_counts[i],
-                    vectors, sizes
+                    vectors, sizes, original_ids
                 );
                 
                 for (size_t v = 0; v < vectors.size(); v++) {
                     DataObject* result = new DataObject(vectors[v], leafPtr->keys[i]);
+                    if (v < original_ids.size()) result->set_id(original_ids[v]);
                     results.push_back(result);
                 }
             }
@@ -1397,16 +1405,18 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
                     // Model B: Retrieve ALL vectors for this key
                     std::vector<std::vector<float>> vectors;
                     std::vector<uint32_t> sizes;
+                    std::vector<int32_t> original_ids;
                     pm->getVectorStore()->retrieveVectorList(
                         leafPtr->vector_list_ids[i], 
                         leafPtr->vector_counts[i],
-                        vectors, sizes
+                        vectors, sizes, original_ids
                     );
                     
                     for (size_t v = 0; v < vectors.size(); v++) {
                         vectors_processed++;
                         double distance = calculate_euclidean_distance(query_vector, vectors[v]);
                         DataObject* candidate = new DataObject(vectors[v], leafPtr->keys[i]);
+                        if (v < original_ids.size()) candidate->set_id(original_ids[v]);
                         
                         if (knn_heap.size() < static_cast<size_t>(k)) {
                             knn_heap.push({distance, candidate});
@@ -1474,10 +1484,11 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
                     auto vec_start = std::chrono::high_resolution_clock::now();
                     std::vector<std::vector<float>> vectors;
                     std::vector<uint32_t> sizes;
+                    std::vector<int32_t> original_ids;
                     pm->getVectorStore()->retrieveVectorList(
                         leaf.vector_list_ids[i], 
                         leaf.vector_counts[i],
-                        vectors, sizes
+                        vectors, sizes, original_ids
                     );
                     auto vec_end = std::chrono::high_resolution_clock::now();
                     vector_reconstruction_time += std::chrono::duration_cast<std::chrono::microseconds>(vec_end - vec_start).count();
@@ -1491,6 +1502,7 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
                         distance_calculation_time += std::chrono::duration_cast<std::chrono::microseconds>(dist_end - dist_start).count();
                         
                         DataObject* candidate = new DataObject(vectors[v], leaf.keys[i]);
+                        if (v < original_ids.size()) candidate->set_id(original_ids[v]);
                         
                         auto heap_start = std::chrono::high_resolution_clock::now();
                         if (knn_heap.size() < static_cast<size_t>(k)) {
@@ -1720,12 +1732,13 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_parallel(
                     // Model B: Retrieve ALL vectors for this key
                     std::vector<std::vector<float>> vectors;
                     std::vector<uint32_t> sizes;
+                    std::vector<int32_t> original_ids;
                     {
                         std::lock_guard<std::mutex> lock(pm_mutex);
                         pm->getVectorStore()->retrieveVectorList(
                             leafPtr->vector_list_ids[i], 
                             leafPtr->vector_counts[i],
-                            vectors, sizes
+                            vectors, sizes, original_ids
                         );
                     }
                     
@@ -1737,6 +1750,7 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_parallel(
                         }
                         
                         DataObject* candidate = new DataObject(vectors[v], leafPtr->keys[i]);
+                        if (v < original_ids.size()) candidate->set_id(original_ids[v]);
                         
                         if (local_heap.size() < static_cast<size_t>(k)) {
                             local_heap.push({distance, candidate});
