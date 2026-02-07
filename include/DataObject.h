@@ -11,13 +11,17 @@ public:
     // Constructors
     DataObject(const std::vector<float>& vector, int value);
     DataObject(const std::vector<float>& vector, float value);
+    DataObject(std::vector<float>&& vector, int value);    // Move-taking constructor
+    DataObject(std::vector<float>&& vector, float value);  // Move-taking constructor
     DataObject(const std::vector<int>& vector, int value);  // Legacy support
     DataObject(const std::vector<int>& vector, float value);  // Legacy support
     DataObject(int vector_size, int value);  // Size-based constructor
     DataObject(const DataObject& other);
+    DataObject(DataObject&& other) noexcept;  // Move constructor
 
-    // Assignment operator
+    // Assignment operators
     DataObject& operator=(const DataObject& other);
+    DataObject& operator=(DataObject&& other) noexcept;  // Move assignment
 
     // Destructor
     ~DataObject();

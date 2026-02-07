@@ -21,7 +21,7 @@ static constexpr uint32_t HEADER_SIZE = 24;
 static constexpr uint32_t MAGIC_VS2 = 0x56535432;  // "VS2"
 
 VectorStore::VectorStore(const std::string& filename, uint32_t max_vector_size)
-    : filename_(filename), max_vector_size_(max_vector_size), next_vector_id_(1) {
+    : filename_(filename), max_vector_size_(max_vector_size), next_vector_id_(1), write_pos_(HEADER_SIZE) {
     
     file_.open(filename, std::ios::binary | std::ios::in | std::ios::out);
     if (!file_.is_open()) {
@@ -64,6 +64,7 @@ void VectorStore::initNewFile() {
     meta_file.close();
     
     next_vector_id_ = 1;
+    write_pos_ = HEADER_SIZE;
 }
 
 void VectorStore::loadExistingFile() {
@@ -89,6 +90,11 @@ void VectorStore::loadExistingFile() {
     file_.read(reinterpret_cast<char*>(&max_vector_size_), sizeof(uint32_t));
     
     readMetadata();
+    
+    // Initialize write_pos_ to end of file for appending
+    file_.seekg(0, std::ios::end);
+    write_pos_ = file_.tellg();
+    if (write_pos_ < HEADER_SIZE) write_pos_ = HEADER_SIZE;
 }
 
 void VectorStore::storeVectorInternal(uint64_t vector_id, const std::vector<float>& vector, 
@@ -97,14 +103,9 @@ void VectorStore::storeVectorInternal(uint64_t vector_id, const std::vector<floa
         actual_size = max_vector_size_;
     }
     
-    file_.seekp(0, std::ios::end);
-    uint64_t offset = file_.tellp();
-    
-    // Ensure we're past the header
-    if (offset < HEADER_SIZE) {
-        offset = HEADER_SIZE;
-        file_.seekp(offset);
-    }
+    // Use tracked write position instead of seeking to end each time
+    uint64_t offset = write_pos_;
+    file_.seekp(offset);
     
     // Write: size (4 bytes) + next_id (8 bytes) + vector data (bulk write)
     file_.write(reinterpret_cast<const char*>(&actual_size), sizeof(uint32_t));
@@ -119,6 +120,9 @@ void VectorStore::storeVectorInternal(uint64_t vector_id, const std::vector<floa
         std::copy(vector.begin(), vector.end(), padded.begin());
         file_.write(reinterpret_cast<const char*>(padded.data()), actual_size * sizeof(float));
     }
+    
+    // Advance tracked write position: header (4+8) + vector data
+    write_pos_ = offset + sizeof(uint32_t) + sizeof(uint64_t) + actual_size * sizeof(float);
     
     // Batched flush: only flush every FLUSH_INTERVAL writes
     writes_since_flush_++;
@@ -182,9 +186,8 @@ void VectorStore::retrieveVector(uint64_t vector_id, std::vector<float>& vector,
     // Skip next_id (8 bytes)
     file_.seekg(sizeof(uint64_t), std::ios::cur);
     
-    for (uint32_t i = 0; i < actual_size; i++) {
-        file_.read(reinterpret_cast<char*>(&vector[i]), sizeof(float));
-    }
+    // Bulk read entire vector at once instead of per-float reads
+    file_.read(reinterpret_cast<char*>(vector.data()), actual_size * sizeof(float));
 }
 
 void VectorStore::retrieveVectorList(uint64_t first_vector_id, uint32_t count,

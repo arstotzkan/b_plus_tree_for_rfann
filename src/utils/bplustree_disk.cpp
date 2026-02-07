@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cmath>
 #include <chrono>
+#include <numeric>
 
 DiskBPlusTree::DiskBPlusTree(const std::string& filename)
     : pm(std::make_unique<PageManager>(filename)) {}
@@ -326,40 +327,77 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
     
     auto start_time = std::chrono::high_resolution_clock::now();
     
-    // Step 1: Sort objects by key
-    std::sort(objects.begin(), objects.end(), [](const DataObject& a, const DataObject& b) {
-        int key_a = a.is_int_value() ? a.get_int_value() : static_cast<int>(a.get_float_value());
-        int key_b = b.is_int_value() ? b.get_int_value() : static_cast<int>(b.get_float_value());
-        return key_a < key_b;
-    });
+    // Pre-reserve VectorStore metadata to avoid rehashing during bulk insert
+    pm->getVectorStore()->reserveMetadata(objects.size());
     
-    // Step 2: Group objects by key (Model B: unique keys with vector lists)
+    // Step 1: Extract keys once into a flat array (avoids variant dispatch per comparison)
+    size_t N = objects.size();
+    std::vector<int> keys(N);
+    for (size_t i = 0; i < N; i++) {
+        keys[i] = objects[i].is_int_value() ? objects[i].get_int_value() 
+                                            : static_cast<int>(objects[i].get_float_value());
+    }
+    
+    // Step 1b: Permutation-based sort — sort lightweight int indices, then reorder DataObjects
+    std::vector<int> perm(N);
+    std::iota(perm.begin(), perm.end(), 0);
+    std::sort(perm.begin(), perm.end(), [&keys](int a, int b) { return keys[a] < keys[b]; });
+    
+    // Reorder keys array to sorted order (needed for grouping below)
+    {
+        std::vector<int> sorted_keys(N);
+        for (size_t i = 0; i < N; i++) sorted_keys[i] = keys[perm[i]];
+        keys = std::move(sorted_keys);
+    }
+    
+    // Apply permutation in-place using cycle-following (each DataObject moved at most once)
+    {
+        std::vector<bool> placed(N, false);
+        for (size_t i = 0; i < N; i++) {
+            if (placed[i] || perm[i] == static_cast<int>(i)) continue;
+            DataObject temp = std::move(objects[i]);
+            size_t j = i;
+            while (perm[j] != static_cast<int>(i)) {
+                objects[j] = std::move(objects[perm[j]]);
+                placed[j] = true;
+                j = perm[j];
+            }
+            objects[j] = std::move(temp);
+            placed[j] = true;
+        }
+    }
+    perm.clear();
+    perm.shrink_to_fit();
+    
+    // Step 2: Group objects by key using pre-extracted sorted keys (no variant dispatch)
     struct KeyGroup {
         int key;
         std::vector<const DataObject*> objects;
     };
     std::vector<KeyGroup> key_groups;
     
-    int current_key = objects[0].is_int_value() ? objects[0].get_int_value() 
-                                                 : static_cast<int>(objects[0].get_float_value());
+    int current_key = keys[0];
     key_groups.push_back({current_key, {&objects[0]}});
     
-    for (size_t i = 1; i < objects.size(); i++) {
-        int key = objects[i].is_int_value() ? objects[i].get_int_value() 
-                                            : static_cast<int>(objects[i].get_float_value());
-        if (key == current_key) {
+    for (size_t i = 1; i < N; i++) {
+        if (keys[i] == current_key) {
             key_groups.back().objects.push_back(&objects[i]);
         } else {
-            current_key = key;
-            key_groups.push_back({key, {&objects[i]}});
+            current_key = keys[i];
+            key_groups.push_back({current_key, {&objects[i]}});
         }
     }
+    keys.clear();
+    keys.shrink_to_fit();
     
     std::cout << "  Grouped into " << key_groups.size() << " unique keys" << std::endl;
     
     // Step 3: Build leaf nodes
+    // Keep previous leaf in memory to avoid re-reading from disk for next-pointer linking
     std::vector<uint32_t> leaf_pids;
     std::vector<int> leaf_first_keys;
+    BPlusNode prev_leaf;
+    uint32_t prev_leaf_pid = INVALID_PAGE;
     
     size_t group_idx = 0;
     while (group_idx < key_groups.size()) {
@@ -394,28 +432,31 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
             group_idx++;
         }
         
-        uint32_t leaf_pid = pm->allocatePage();
+        uint32_t leaf_pid = pm->allocatePageDeferred();
         leaf_pids.push_back(leaf_pid);
         leaf_first_keys.push_back(leaf.keys[0]);
         
-        // Link to previous leaf
-        if (leaf_pids.size() > 1) {
-            BPlusNode prev_leaf;
-            read(leaf_pids[leaf_pids.size() - 2], prev_leaf);
+        // Link previous leaf to this one (using in-memory copy, no disk re-read)
+        if (prev_leaf_pid != INVALID_PAGE) {
             prev_leaf.next = leaf_pid;
-            write(leaf_pids[leaf_pids.size() - 2], prev_leaf);
+            write(prev_leaf_pid, prev_leaf);
         }
         
         leaf.next = INVALID_PAGE;
-        write(leaf_pid, leaf);
+        prev_leaf = leaf;
+        prev_leaf_pid = leaf_pid;
+    }
+    
+    // Write the last leaf (its next pointer is already INVALID_PAGE)
+    if (prev_leaf_pid != INVALID_PAGE) {
+        write(prev_leaf_pid, prev_leaf);
     }
     
     std::cout << "  Created " << leaf_pids.size() << " leaf nodes" << std::endl;
     
     // Step 4: Build internal nodes bottom-up
     if (leaf_pids.size() == 1) {
-        // Single leaf is the root
-        pm->setRoot(leaf_pids[0]);
+        pm->setRootDeferred(leaf_pids[0]);
     } else {
         // Build internal node levels
         std::vector<uint32_t> current_level_pids = leaf_pids;
@@ -448,7 +489,7 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
                     child_idx++;
                 }
                 
-                uint32_t internal_pid = pm->allocatePage();
+                uint32_t internal_pid = pm->allocatePageDeferred();
                 next_level_pids.push_back(internal_pid);
                 next_level_keys.push_back(first_key);
                 write(internal_pid, internal);
@@ -459,10 +500,10 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
             current_level_keys = std::move(next_level_keys);
         }
         
-        pm->setRoot(current_level_pids[0]);
+        pm->setRootDeferred(current_level_pids[0]);
     }
     
-    // Flush vector store
+    // Single header save + vector store flush at the end (instead of per-allocation)
     pm->getVectorStore()->flush();
     pm->saveHeader();
     

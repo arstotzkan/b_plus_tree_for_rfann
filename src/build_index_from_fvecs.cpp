@@ -162,7 +162,7 @@ int main(int argc, char* argv[]) {
     int vector_count = 0;
 
     if (has_label) {
-        // RFANN Mode: Load labels, load all vectors, sort by label, insert by sorted position
+        // RFANN Mode: Load labels, build DataObjects directly, sort in-place, bulk load
         std::cout << "RFANN Mode: Sorting vectors by label from " << label_path << std::endl;
         Logger::info("RFANN Mode: reading labels from " + label_path);
 
@@ -183,46 +183,76 @@ int main(int argc, char* argv[]) {
         }
         std::cout << "Loaded " << labels.size() << " labels" << std::endl;
 
-        // Load all vectors into memory
-        std::vector<std::vector<float>> all_vectors;
+        // Build DataObjects directly from fvecs file (single allocation, no intermediate copy)
+        std::vector<DataObject> objects;
+        objects.reserve(labels.size());
         int32_t current_dim;
+        size_t vec_idx = 0;
         while (file.read(reinterpret_cast<char*>(&current_dim), sizeof(int32_t))) {
             std::vector<float> vec(current_dim);
             if (!file.read(reinterpret_cast<char*>(vec.data()), current_dim * sizeof(float))) break;
-            all_vectors.push_back(std::move(vec));
+            if (vec_idx < labels.size()) {
+                objects.emplace_back(std::move(vec), labels[vec_idx]);
+            }
+            vec_idx++;
         }
         file.close();
-        std::cout << "Loaded " << all_vectors.size() << " vectors into memory" << std::endl;
+        std::cout << "Loaded " << objects.size() << " vectors directly into DataObjects" << std::endl;
 
-        if (labels.size() != all_vectors.size()) {
-            std::cerr << "Error: Label count (" << labels.size() << ") != vector count (" << all_vectors.size() << ")" << std::endl;
+        if (labels.size() != objects.size()) {
+            std::cerr << "Error: Label count (" << labels.size() << ") != vector count (" << objects.size() << ")" << std::endl;
             Logger::close();
             return 1;
         }
 
-        int N = static_cast<int>(all_vectors.size());
+        int N = static_cast<int>(objects.size());
 
-        // Sort permutation by label value
+        // Permutation-based sort: sort lightweight indices, then reorder DataObjects in one pass.
+        // This keeps the O(N log N) sort phase operating on 4-byte ints (cache-friendly),
+        // and does a single O(N) pass of DataObject moves at the end.
+        std::cout << "Sorting " << N << " vectors by label (permutation sort)..." << std::endl;
+        Logger::info("Sorting " + std::to_string(N) + " vectors by label (permutation sort)");
+
+        // Extract keys once into a flat array for cache-friendly comparisons
+        std::vector<int> keys(N);
+        for (int i = 0; i < N; i++) {
+            keys[i] = labels[i];
+        }
+
+        // Free labels early — no longer needed
+        labels.clear();
+        labels.shrink_to_fit();
+
+        // Sort a permutation array by key value (only 4-byte ints are compared/swapped)
         std::vector<int> perm(N);
         std::iota(perm.begin(), perm.end(), 0);
-        std::sort(perm.begin(), perm.end(), [&](int a, int b) { return labels[a] < labels[b]; });
+        std::sort(perm.begin(), perm.end(), [&keys](int a, int b) { return keys[a] < keys[b]; });
 
-        // Build DataObjects in sorted order and bulk load into B+ tree
-        // Key = label value (not positional index), so the tree can be searched by attribute range directly
-        std::cout << "Building DataObjects in sorted order for bulk load..." << std::endl;
-        Logger::info("Building DataObjects in sorted order for bulk load");
-        std::vector<DataObject> sorted_objects;
-        sorted_objects.reserve(N);
+        // Apply permutation in-place using cycle-following (each DataObject moved at most once)
+        std::vector<bool> placed(N, false);
         for (int i = 0; i < N; i++) {
-            sorted_objects.emplace_back(std::move(all_vectors[perm[i]]), labels[perm[i]]);
+            if (placed[i] || perm[i] == i) continue;
+            DataObject temp = std::move(objects[i]);
+            int j = i;
+            while (perm[j] != i) {
+                objects[j] = std::move(objects[perm[j]]);
+                placed[j] = true;
+                j = perm[j];
+            }
+            objects[j] = std::move(temp);
+            placed[j] = true;
         }
-        all_vectors.clear();
-        all_vectors.shrink_to_fit();
+
+        // Free sort temporaries
+        keys.clear();
+        keys.shrink_to_fit();
+        perm.clear();
+        perm.shrink_to_fit();
 
         std::cout << "Bulk loading " << N << " vectors into B+ tree..." << std::endl;
         Logger::info("Starting bulk load of " + std::to_string(N) + " vectors");
         try {
-            dataTree.bulk_load(sorted_objects);
+            dataTree.bulk_load(objects);
         } catch (const std::exception& e) {
             std::cerr << "ERROR during bulk load: " << e.what() << std::endl;
             Logger::error("ERROR during bulk load: " + std::string(e.what()));

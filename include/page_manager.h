@@ -32,8 +32,12 @@ public:
     void writeRawPage(uint32_t pid, const char* buffer, size_t size);
     
     uint32_t allocatePage();
+    // Allocate a page without immediately saving the header to disk.
+    // Caller must call saveHeader() or flushHeader() when done with batch allocations.
+    uint32_t allocatePageDeferred();
     uint32_t getRoot();
     void setRoot(uint32_t pid);
+    void setRootDeferred(uint32_t pid);
     
     // Access configuration
     const BPTreeConfig& getConfig() const { return header_.config; }

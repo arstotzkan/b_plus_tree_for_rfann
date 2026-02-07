@@ -34,6 +34,9 @@ public:
     void setNextVectorId(uint64_t id) { next_vector_id_ = id; }
     uint32_t getMaxVectorSize() const { return max_vector_size_; }
     
+    // Pre-reserve metadata hash map capacity to avoid rehashing during bulk load
+    void reserveMetadata(size_t count) { metadata_.reserve(count); }
+    
     void flush();
     void close();
     
@@ -61,6 +64,7 @@ private:
     std::string filename_;
     uint32_t max_vector_size_;
     uint64_t next_vector_id_;
+    uint64_t write_pos_;  // Tracks append position to avoid seekp(end) per write
     std::unordered_map<uint64_t, VectorMetadata> metadata_;
     
     // Batched flush: flush to disk every N writes instead of every write

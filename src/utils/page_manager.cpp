@@ -278,6 +278,10 @@ uint32_t PageManager::allocatePage() {
     return pid;
 }
 
+uint32_t PageManager::allocatePageDeferred() {
+    return header_.next_free_page++;
+}
+
 uint32_t PageManager::getRoot() {
     return header_.root_page;
 }
@@ -285,4 +289,8 @@ uint32_t PageManager::getRoot() {
 void PageManager::setRoot(uint32_t pid) {
     header_.root_page = pid;
     saveHeader();
+}
+
+void PageManager::setRootDeferred(uint32_t pid) {
+    header_.root_page = pid;
 }
