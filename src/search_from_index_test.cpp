@@ -358,8 +358,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Memory Index: " << (use_memory_index ? "enabled" : "disabled") << std::endl << std::endl;
     
     double total_recall = 0.0;
-    long long total_range_time = 0;
-    long long total_knn_time = 0;
+    long long total_query_time_sum = 0;  // Sum of individual query durations (for avg latency)
     int valid_queries = 0;
     int cache_hits = 0;
 
@@ -376,6 +375,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    auto wall_start = std::chrono::high_resolution_clock::now();
     for (int batch_start = 0; batch_start < queries_to_run; batch_start += effective_threads) {
         int batch_end = std::min(batch_start + effective_threads, queries_to_run);
         int batch_count = batch_end - batch_start;
@@ -421,7 +421,7 @@ int main(int argc, char* argv[]) {
                 if (match.found) {
                     st.cache_hit = true;
                     st.used_similar_query_id = match.query_id;
-                    total_range_time += cache_duration;
+                    total_query_time_sum += cache_duration;
                     // NOTE: Cache doesn't store original_id yet
                     for (const auto& neighbor : match.result.neighbors) {
                         st.retrieved.push_back(neighbor.key);
@@ -475,7 +475,7 @@ int main(int argc, char* argv[]) {
             if (st.skipped) continue;
 
             if (!st.cache_hit) {
-                total_range_time += st.search_duration_us;
+                total_query_time_sum += st.search_duration_us;
 
                 std::ostringstream query_params;
                 query_params << "Query #" << (q + 1) << " | K=" << k_neighbors
@@ -524,6 +524,8 @@ int main(int argc, char* argv[]) {
         }
     }
     std::cout << std::endl;
+    auto wall_end = std::chrono::high_resolution_clock::now();
+    double wall_time_ms = std::chrono::duration_cast<std::chrono::microseconds>(wall_end - wall_start).count() / 1000.0;
 
     // Print results
     std::cout << std::endl << "=== Benchmark Results ===" << std::endl;
@@ -534,19 +536,18 @@ int main(int argc, char* argv[]) {
         double cache_hit_rate = (double)cache_hits / queries_to_run * 100.0;
         std::cout << "Cache hit rate: " << std::fixed << std::setprecision(1) << cache_hit_rate << "%" << std::endl;
     }
-    std::cout << "Average range search time: " << (total_range_time / queries_to_run) << " us" << std::endl;
-    std::cout << "Average KNN time: " << (total_knn_time / queries_to_run) << " us" << std::endl;
-    std::cout << "Average total query time: " << (total_range_time / queries_to_run) << " us" << std::endl;
-    std::cout << "Total time: " << (total_range_time / 1000.0) << " ms" << std::endl;
-    std::cout << "Queries per second: " << (queries_to_run * 1000000.0 / (total_range_time + total_knn_time)) << std::endl;
+    std::cout << "Average query latency: " << (total_query_time_sum / queries_to_run) << " us" << std::endl;
+    std::cout << "Total wall-clock time: " << wall_time_ms << " ms" << std::endl;
+    std::cout << "Queries per second: " << (queries_to_run * 1000.0 / wall_time_ms) << std::endl;
 
     // Log batch performance summary
     std::ostringstream batch_summary;
     batch_summary << "Batch test completed | Total queries: " << queries_to_run
                   << " | Cache hits: " << cache_hits << " (" << (cache_hits * 100.0 / queries_to_run) << "%)"
-                  << " | Avg query time: " << (total_range_time / queries_to_run) << " μs"
-                  << " | QPS: " << (queries_to_run * 1000000.0 / (total_range_time + total_knn_time));
-    Logger::log_performance("BATCH_TEST", total_range_time / 1000.0, batch_summary.str());
+                  << " | Avg latency: " << (total_query_time_sum / queries_to_run) << " μs"
+                  << " | Wall time: " << wall_time_ms << " ms"
+                  << " | QPS: " << (queries_to_run * 1000.0 / wall_time_ms);
+    Logger::log_performance("BATCH_TEST", wall_time_ms, batch_summary.str());
 
     if (has_groundtruth && valid_queries > 0) {
         std::cout << std::endl << "=== Recall ===" << std::endl;
