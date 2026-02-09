@@ -44,7 +44,7 @@ std::vector<std::vector<float>> load_fvecs_queries(const std::string& path) {
     std::vector<std::vector<float>> queries;
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
-        std::cerr << "Error: Cannot open query file: " << path << std::endl;
+        std::cerr << "Error: Cannot open query file: " << path << "\n";
         return queries;
     }
 
@@ -64,7 +64,7 @@ std::vector<std::vector<int32_t>> load_ivecs_groundtruth(const std::string& path
     std::vector<std::vector<int32_t>> groundtruth;
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
-        std::cerr << "Error: Cannot open groundtruth file: " << path << std::endl;
+        std::cerr << "Error: Cannot open groundtruth file: " << path << "\n";
         return groundtruth;
     }
 
@@ -97,7 +97,7 @@ double calculate_recall(const std::vector<int>& retrieved, const std::vector<int
 std::vector<std::pair<int, int>> read_qrange_json(const std::string& path, int num_queries) {
     std::ifstream in(path);
     if (!in.is_open()) {
-        std::cerr << "Error: Cannot open qrange file: " << path << std::endl;
+        std::cerr << "Error: Cannot open qrange file: " << path << "\n";
         return {};
     }
     nlohmann::json j;
@@ -114,30 +114,30 @@ std::vector<std::pair<int, int>> read_qrange_json(const std::string& path, int n
 }
 
 void print_usage(const char* program_name) {
-    std::cout << "Usage: " << program_name << " --index <index_dir> [options]" << std::endl;
-    std::cout << std::endl;
-    std::cout << "Flags:" << std::endl;
-    std::cout << "  --index, -i      Path to the index directory (required)" << std::endl;
-    std::cout << "  --queries, -q    Path to query vectors file (.fvecs format)" << std::endl;
-    std::cout << "  --groundtruth    Path to groundtruth file (.ivecs format)" << std::endl;
-    std::cout << "  --qrange-path         Path to query range JSON file for RFANN (optional)" << std::endl;
-    std::cout << "                   Format: [left0, right0, left1, right1, ...] attribute pairs" << std::endl;
-    std::cout << "                   Used directly as B+ tree key ranges (index must be built with --label-path)" << std::endl;
-    std::cout << "  --num-queries    Number of queries to run (default: all)" << std::endl;
-    std::cout << "  --no-cache       Disable query caching" << std::endl;
-    std::cout << "  --parallel       Enable parallel multi-query execution (requires --memory-index)" << std::endl;
-    std::cout << "  --threads        Number of concurrent queries for --parallel (0 = auto, default)" << std::endl;
-    std::cout << "  --memory-index   Load entire index into memory before searching (faster for multiple queries)" << std::endl;
-    std::cout << "  --vec-sim        Vector similarity threshold for cache matching [0.0-1.0] (default: 1.0 = exact)" << std::endl;
-    std::cout << "  --range-sim      Range similarity threshold for cache matching [0.0-1.0] (default: 1.0 = exact)" << std::endl;
-    std::cout << std::endl;
-    std::cout << "Examples:" << std::endl;
-    std::cout << "  Batch RFANN test:" << std::endl;
-    std::cout << "    " << program_name << " --index data/sift_index --queries data/dataset/siftsmall_query.fvecs \\" << std::endl;
-    std::cout << "      --groundtruth data/dataset/siftsmall_groundtruth.ivecs" << std::endl;
-    std::cout << "  Parallel RFANN test:" << std::endl;
-    std::cout << "    " << program_name << " --index data/sift_index --queries data/dataset/siftsmall_query.fvecs \\" << std::endl;
-    std::cout << "      --groundtruth data/dataset/siftsmall_groundtruth.ivecs --parallel" << std::endl;
+    std::cout << "Usage: " << program_name << " --index <index_dir> [options]" << "\n";
+    std::cout << "\n";
+    std::cout << "Flags:" << "\n";
+    std::cout << "  --index, -i      Path to the index directory (required)" << "\n";
+    std::cout << "  --queries, -q    Path to query vectors file (.fvecs format)" << "\n";
+    std::cout << "  --groundtruth    Path to groundtruth file (.ivecs format)" << "\n";
+    std::cout << "  --qrange-path         Path to query range JSON file for RFANN (optional)" << "\n";
+    std::cout << "                   Format: [left0, right0, left1, right1, ...] attribute pairs" << "\n";
+    std::cout << "                   Used directly as B+ tree key ranges (index must be built with --label-path)" << "\n";
+    std::cout << "  --num-queries    Number of queries to run (default: all)" << "\n";
+    std::cout << "  --no-cache       Disable query caching" << "\n";
+    std::cout << "  --parallel       Enable parallel multi-query execution (requires --memory-index)" << "\n";
+    std::cout << "  --threads        Number of concurrent queries for --parallel (0 = auto, default)" << "\n";
+    std::cout << "  --memory-index   Load entire index into memory before searching (faster for multiple queries)" << "\n";
+    std::cout << "  --vec-sim        Vector similarity threshold for cache matching [0.0-1.0] (default: 1.0 = exact)" << "\n";
+    std::cout << "  --range-sim      Range similarity threshold for cache matching [0.0-1.0] (default: 1.0 = exact)" << "\n";
+    std::cout << "\n";
+    std::cout << "Examples:" << "\n";
+    std::cout << "  Batch RFANN test:" << "\n";
+    std::cout << "    " << program_name << " --index data/sift_index --queries data/dataset/siftsmall_query.fvecs \\" << "\n";
+    std::cout << "      --groundtruth data/dataset/siftsmall_groundtruth.ivecs" << "\n";
+    std::cout << "  Parallel RFANN test:" << "\n";
+    std::cout << "    " << program_name << " --index data/sift_index --queries data/dataset/siftsmall_query.fvecs \\" << "\n";
+    std::cout << "      --groundtruth data/dataset/siftsmall_groundtruth.ivecs --parallel" << "\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -187,13 +187,13 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--vec-sim" && i + 1 < argc) {
             vec_sim_threshold = std::atof(argv[++i]);
             if (vec_sim_threshold < 0.0 || vec_sim_threshold > 1.0) {
-                std::cerr << "Error: --vec-sim must be between 0.0 and 1.0" << std::endl;
+                std::cerr << "Error: --vec-sim must be between 0.0 and 1.0" << "\n";
                 return 1;
             }
         } else if (arg == "--range-sim" && i + 1 < argc) {
             range_sim_threshold = std::atof(argv[++i]);
             if (range_sim_threshold < 0.0 || range_sim_threshold > 1.0) {
-                std::cerr << "Error: --range-sim must be between 0.0 and 1.0" << std::endl;
+                std::cerr << "Error: --range-sim must be between 0.0 and 1.0" << "\n";
                 return 1;
             }
         } else if (arg == "--help" || arg == "-h") {
@@ -203,30 +203,30 @@ int main(int argc, char* argv[]) {
     }
 
     if (!has_index) {
-        std::cerr << "Error: Missing required --index flag" << std::endl;
+        std::cerr << "Error: Missing required --index flag" << "\n";
         print_usage(argv[0]);
         return 1;
     }
 
     IndexDirectory idx_dir(index_dir);
     if (!idx_dir.index_exists()) {
-        std::cerr << "Error: Index file not found: " << idx_dir.get_index_file_path() << std::endl;
+        std::cerr << "Error: Index file not found: " << idx_dir.get_index_file_path() << "\n";
         return 1;
     }
 
     // Check index cache configuration - this overrides command line --no-cache
     bool index_cache_enabled = idx_dir.read_cache_config();
     if (cache_enabled && !index_cache_enabled) {
-        std::cout << "Note: Index was created with --no-cache, disabling cache for this benchmark." << std::endl;
+        std::cout << "Note: Index was created with --no-cache, disabling cache for this benchmark." << "\n";
         cache_enabled = false;
     }
 
-    std::cout << "=== RFANN B+ Tree Benchmark ===" << std::endl;
-    std::cout << "Index directory: " << index_dir << std::endl;
-    std::cout << "Index file: " << idx_dir.get_index_file_path() << std::endl;
-    std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << std::endl;
+    std::cout << "=== RFANN B+ Tree Benchmark ===" << "\n";
+    std::cout << "Index directory: " << index_dir << "\n";
+    std::cout << "Index file: " << idx_dir.get_index_file_path() << "\n";
+    std::cout << "Cache: " << (cache_enabled ? "enabled" : "disabled") << "\n";
     if (!index_cache_enabled) {
-        std::cout << "Cache disabled by index configuration (--no-cache used during build)" << std::endl;
+        std::cout << "Cache disabled by index configuration (--no-cache used during build)" << "\n";
     }
 
     // Initialize logging
@@ -242,12 +242,12 @@ int main(int argc, char* argv[]) {
 
     // Load index into memory if requested
     if (use_memory_index) {
-        std::cout << "Loading index into memory..." << std::endl;
+        std::cout << "Loading index into memory..." << "\n";
         auto load_start = std::chrono::high_resolution_clock::now();
         dataTree.loadIntoMemory();
         auto load_end = std::chrono::high_resolution_clock::now();
         auto load_duration = std::chrono::duration_cast<std::chrono::milliseconds>(load_end - load_start);
-        std::cout << "Index loaded into memory in " << load_duration.count() << " ms" << std::endl;
+        std::cout << "Index loaded into memory in " << load_duration.count() << " ms" << "\n";
     }
 
     // Log test configuration
@@ -261,12 +261,12 @@ int main(int argc, char* argv[]) {
 
     auto [min_key, max_key] = dataTree.get_key_range();
     if (max_key < min_key) {
-        std::cerr << "Error: Tree appears empty" << std::endl;
+        std::cerr << "Error: Tree appears empty" << "\n";
         return 1;
     }
-    std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled") << std::endl;
-    std::cout << "Memory Index: " << (use_memory_index ? "enabled" : "disabled") << std::endl;
-    std::cout << "Range filter (from tree): [" << min_key << ", " << max_key << "]" << std::endl;
+    std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled") << "\n";
+    std::cout << "Memory Index: " << (use_memory_index ? "enabled" : "disabled") << "\n";
+    std::cout << "Range filter (from tree): [" << min_key << ", " << max_key << "]" << "\n";
 
     // Load per-query attribute ranges if --qrange provided
     std::vector<std::pair<int, int>> query_ranges;
@@ -274,16 +274,16 @@ int main(int argc, char* argv[]) {
     if (has_qrange) {
         int qrange_limit = (num_queries > 0) ? num_queries : 1000000;
         query_ranges = read_qrange_json(qrange_path, qrange_limit);
-        std::cout << "Loaded " << query_ranges.size() << " query ranges from: " << qrange_path << std::endl;
+        std::cout << "Loaded " << query_ranges.size() << " query ranges from: " << qrange_path << "\n";
         for (size_t ex = 0; ex < std::min(static_cast<size_t>(3), query_ranges.size()); ex++) {
-            std::cout << "  Query " << ex << ": range [" << query_ranges[ex].first << ", " << query_ranges[ex].second << "]" << std::endl;
+            std::cout << "  Query " << ex << ": range [" << query_ranges[ex].first << ", " << query_ranges[ex].second << "]" << "\n";
         }
         use_per_query_range = true;
     }
 
     // If no queries file provided, run simple tests
     if (!has_queries) {
-        std::cout << std::endl << "No query file provided. Running simple tests..." << std::endl;
+        std::cout << "\n" << "No query file provided. Running simple tests..." << "\n";
         
         // Simple range search test
         int test_min = min_key;
@@ -294,7 +294,7 @@ int main(int argc, char* argv[]) {
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         
-        std::cout << "Range search [" << test_min << ", " << test_max << "]: " << results.size() << " results in " << duration.count() << " us" << std::endl;
+        std::cout << "Range search [" << test_min << ", " << test_max << "]: " << results.size() << " results in " << duration.count() << " us" << "\n";
         
         for (DataObject* obj : results) {
             delete obj;
@@ -303,24 +303,24 @@ int main(int argc, char* argv[]) {
     }
 
     // Load queries
-    std::cout << "Loading queries from: " << queries_path << std::endl;
+    std::cout << "Loading queries from: " << queries_path << "\n";
     std::vector<std::vector<float>> queries = load_fvecs_queries(queries_path);
     if (queries.empty()) {
-        std::cerr << "Error: No queries loaded" << std::endl;
+        std::cerr << "Error: No queries loaded" << "\n";
         return 1;
     }
-    std::cout << "Loaded " << queries.size() << " queries (dimension: " << queries[0].size() << ")" << std::endl;
+    std::cout << "Loaded " << queries.size() << " queries (dimension: " << queries[0].size() << ")" << "\n";
 
     // Load groundtruth if provided
     std::vector<std::vector<int32_t>> groundtruth;
     int k_neighbors = -1;
     if (has_groundtruth) {
-        std::cout << "Loading groundtruth from: " << groundtruth_path << std::endl;
+        std::cout << "Loading groundtruth from: " << groundtruth_path << "\n";
         groundtruth = load_ivecs_groundtruth(groundtruth_path);
-        std::cout << "Loaded " << groundtruth.size() << " groundtruth entries" << std::endl;
+        std::cout << "Loaded " << groundtruth.size() << " groundtruth entries" << "\n";
 
         if (groundtruth.empty()) {
-            std::cerr << "Error: Groundtruth file is empty" << std::endl;
+            std::cerr << "Error: Groundtruth file is empty" << "\n";
             return 1;
         }
         // Determine K from first non-empty groundtruth row
@@ -331,31 +331,31 @@ int main(int argc, char* argv[]) {
             }
         }
         if (k_neighbors <= 0) {
-            std::cerr << "Error: All groundtruth rows are empty, cannot determine K" << std::endl;
+            std::cerr << "Error: All groundtruth rows are empty, cannot determine K" << "\n";
             return 1;
         }
     }
 
     if (has_groundtruth) {
-        std::cout << "K (from groundtruth): " << k_neighbors << std::endl;
+        std::cout << "K (from groundtruth): " << k_neighbors << "\n";
     }
-    std::cout << std::endl;
+    std::cout << "\n";
 
     // Limit number of queries if specified
     int queries_to_run = (num_queries > 0 && num_queries < static_cast<int>(queries.size())) 
                          ? num_queries : static_cast<int>(queries.size());
 
     // Run batch queries
-    std::cout << "=== Running " << queries_to_run << " RFANN Queries ===" << std::endl;
+    std::cout << "=== Running " << queries_to_run << " RFANN Queries ===" << "\n";
     if (use_per_query_range) {
-        std::cout << "Configuration: K=" << k_neighbors << " | Per-query ranges from qrange file" << std::endl;
+        std::cout << "Configuration: K=" << k_neighbors << " | Per-query ranges from qrange file" << "\n";
     } else {
-        std::cout << "Configuration: K=" << k_neighbors << " | Range=[" << min_key << "," << max_key << "]" << std::endl;
+        std::cout << "Configuration: K=" << k_neighbors << " | Range=[" << min_key << "," << max_key << "]" << "\n";
     }
     std::cout << "Parallel: " << (use_parallel ? "enabled" : "disabled");
     if (use_parallel) std::cout << " | Threads: " << (num_threads > 0 ? std::to_string(num_threads) : "auto-detect");
-    std::cout << std::endl;
-    std::cout << "Memory Index: " << (use_memory_index ? "enabled" : "disabled") << std::endl << std::endl;
+    std::cout << "\n";
+    std::cout << "Memory Index: " << (use_memory_index ? "enabled" : "disabled") << "\n" << "\n";
     
     double total_recall = 0.0;
     long long total_query_time_sum = 0;  // Sum of individual query durations (for avg latency)
@@ -366,12 +366,12 @@ int main(int argc, char* argv[]) {
     int effective_threads = 1;
     if (use_parallel) {
         if (!use_memory_index) {
-            std::cerr << "Warning: --parallel requires --memory-index for multi-query parallelism. Falling back to sequential." << std::endl;
+            std::cerr << "Warning: --parallel requires --memory-index for multi-query parallelism. Falling back to sequential." << "\n";
             use_parallel = false;
         } else {
             effective_threads = (num_threads > 0) ? num_threads : static_cast<int>(std::thread::hardware_concurrency());
             if (effective_threads <= 0) effective_threads = 4;
-            std::cout << "Parallel query execution: " << effective_threads << " concurrent queries" << std::endl;
+            std::cout << "Parallel query execution: " << effective_threads << " concurrent queries" << "\n";
         }
     }
 
@@ -523,22 +523,22 @@ int main(int argc, char* argv[]) {
             std::cout << "\rProgress: " << batch_end << "/" << queries_to_run << " queries" << std::flush;
         }
     }
-    std::cout << std::endl;
+    std::cout << "\n";
     auto wall_end = std::chrono::high_resolution_clock::now();
     double wall_time_ms = std::chrono::duration_cast<std::chrono::microseconds>(wall_end - wall_start).count() / 1000.0;
 
     // Print results
-    std::cout << std::endl << "=== Benchmark Results ===" << std::endl;
-    std::cout << "Total queries: " << queries_to_run << std::endl;
-    std::cout << "Cache hits: " << cache_hits << std::endl;
-    std::cout << "Tree searches: " << (queries_to_run - cache_hits) << std::endl;
+    std::cout << "\n" << "=== Benchmark Results ===" << "\n";
+    std::cout << "Total queries: " << queries_to_run << "\n";
+    std::cout << "Cache hits: " << cache_hits << "\n";
+    std::cout << "Tree searches: " << (queries_to_run - cache_hits) << "\n";
     if (cache_enabled && queries_to_run > 0) {
         double cache_hit_rate = (double)cache_hits / queries_to_run * 100.0;
-        std::cout << "Cache hit rate: " << std::fixed << std::setprecision(1) << cache_hit_rate << "%" << std::endl;
+        std::cout << "Cache hit rate: " << std::fixed << std::setprecision(1) << cache_hit_rate << "%" << "\n";
     }
-    std::cout << "Average query latency: " << (total_query_time_sum / queries_to_run) << " us" << std::endl;
-    std::cout << "Total wall-clock time: " << wall_time_ms << " ms" << std::endl;
-    std::cout << "Queries per second: " << (queries_to_run * 1000.0 / wall_time_ms) << std::endl;
+    std::cout << "Average query latency: " << (total_query_time_sum / queries_to_run) << " us" << "\n";
+    std::cout << "Total wall-clock time: " << wall_time_ms << " ms" << "\n";
+    std::cout << "Queries per second: " << (queries_to_run * 1000.0 / wall_time_ms) << "\n";
 
     // Log batch performance summary
     std::ostringstream batch_summary;
@@ -550,8 +550,8 @@ int main(int argc, char* argv[]) {
     Logger::log_performance("BATCH_TEST", wall_time_ms, batch_summary.str());
 
     if (has_groundtruth && valid_queries > 0) {
-        std::cout << std::endl << "=== Recall ===" << std::endl;
-        std::cout << "Recall@" << k_neighbors << ": " << (total_recall / valid_queries * 100.0) << "%" << std::endl;
+        std::cout << "\n" << "=== Recall ===" << "\n";
+        std::cout << "Recall@" << k_neighbors << ": " << (total_recall / valid_queries * 100.0) << "%" << "\n";
     }
 
     return 0;
