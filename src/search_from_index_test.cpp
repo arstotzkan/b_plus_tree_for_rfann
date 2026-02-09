@@ -14,6 +14,7 @@
 #include <chrono>
 #include <set>
 #include <cstdint>
+#include <thread>
 #include <nlohmann/json.hpp>
 
 // Calculate Euclidean distance between two vectors
@@ -124,8 +125,8 @@ void print_usage(const char* program_name) {
     std::cout << "                   Used directly as B+ tree key ranges (index must be built with --label-path)" << std::endl;
     std::cout << "  --num-queries    Number of queries to run (default: all)" << std::endl;
     std::cout << "  --no-cache       Disable query caching" << std::endl;
-    std::cout << "  --parallel       Enable parallel KNN search (auto-detects optimal thread count)" << std::endl;
-    std::cout << "  --threads        Number of threads for parallel search (0 = auto, default)" << std::endl;
+    std::cout << "  --parallel       Enable parallel multi-query execution (requires --memory-index)" << std::endl;
+    std::cout << "  --threads        Number of concurrent queries for --parallel (0 = auto, default)" << std::endl;
     std::cout << "  --memory-index   Load entire index into memory before searching (faster for multiple queries)" << std::endl;
     std::cout << "  --vec-sim        Vector similarity threshold for cache matching [0.0-1.0] (default: 1.0 = exact)" << std::endl;
     std::cout << "  --range-sim      Range similarity threshold for cache matching [0.0-1.0] (default: 1.0 = exact)" << std::endl;
@@ -318,17 +319,20 @@ int main(int argc, char* argv[]) {
         groundtruth = load_ivecs_groundtruth(groundtruth_path);
         std::cout << "Loaded " << groundtruth.size() << " groundtruth entries" << std::endl;
 
-        if (groundtruth.empty() || groundtruth[0].empty()) {
-            std::cerr << "Error: Groundtruth file has no neighbors" << std::endl;
+        if (groundtruth.empty()) {
+            std::cerr << "Error: Groundtruth file is empty" << std::endl;
             return 1;
         }
-        k_neighbors = static_cast<int>(groundtruth[0].size());
-        for (size_t i = 1; i < groundtruth.size(); i++) {
-            if (groundtruth[i].size() != groundtruth[0].size()) {
-                std::cerr << "Error: Groundtruth file has inconsistent K at row " << i
-                          << " (expected " << groundtruth[0].size() << ", got " << groundtruth[i].size() << ")" << std::endl;
-                return 1;
+        // Determine K from first non-empty groundtruth row
+        for (size_t i = 0; i < groundtruth.size(); i++) {
+            if (!groundtruth[i].empty()) {
+                k_neighbors = static_cast<int>(groundtruth[i].size());
+                break;
             }
+        }
+        if (k_neighbors <= 0) {
+            std::cerr << "Error: All groundtruth rows are empty, cannot determine K" << std::endl;
+            return 1;
         }
     }
 
@@ -359,138 +363,164 @@ int main(int argc, char* argv[]) {
     int valid_queries = 0;
     int cache_hits = 0;
 
-    for (int q = 0; q < queries_to_run; q++) {
-        const std::vector<float>& query_vec = queries[q];
-        std::vector<int> retrieved;
-
-        // Determine range for this query
-        int q_min = min_key;
-        int q_max = max_key;
-        if (use_per_query_range && q < static_cast<int>(query_ranges.size())) {
-            q_min = query_ranges[q].first;
-            q_max = query_ranges[q].second;
-            if (q_min > q_max) {
-                // Skip queries with invalid ranges
-                if ((q + 1) % 10 == 0 || q == queries_to_run - 1)
-                    std::cout << "\rProgress: " << (q + 1) << "/" << queries_to_run << " queries" << std::flush;
-                continue;
-            }
+    // Determine parallelism
+    int effective_threads = 1;
+    if (use_parallel) {
+        if (!use_memory_index) {
+            std::cerr << "Warning: --parallel requires --memory-index for multi-query parallelism. Falling back to sequential." << std::endl;
+            use_parallel = false;
+        } else {
+            effective_threads = (num_threads > 0) ? num_threads : static_cast<int>(std::thread::hardware_concurrency());
+            if (effective_threads <= 0) effective_threads = 4;
+            std::cout << "Parallel query execution: " << effective_threads << " concurrent queries" << std::endl;
         }
+    }
 
-        std::string query_hash = cache.compute_query_hash(query_vec, q_min, q_max);
-        std::string used_similar_query_id;  // Track if we used a similar query's results
-        bool cache_hit = false;
-        
-        if (cache_enabled) {
-            SimilarityThresholds thresholds(vec_sim_threshold, range_sim_threshold);
-            auto cache_start = std::chrono::high_resolution_clock::now();
-            SimilarCacheMatch match = cache.find_similar_cached_result(
-                query_vec, q_min, q_max, k_neighbors, thresholds);
-            auto cache_end = std::chrono::high_resolution_clock::now();
-            long long cache_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_end - cache_start).count();
-            
-            if (match.found) {
-                cache_hit = true;
-                used_similar_query_id = match.query_id;
-                total_range_time += cache_duration;
-                
-                // NOTE: Cache doesn't store original_id yet, so cache-hit recall
-                // will use keys instead of fvecs indices. Rebuild index to get correct recall.
-                for (const auto& neighbor : match.result.neighbors) {
-                    retrieved.push_back(neighbor.key);
-                }
-                cache_hits++;
-                
-                // Log cache hit
-                std::ostringstream cache_log;
-                if (match.vector_similarity >= 1.0 && match.range_similarity >= 1.0) {
-                    cache_log << "Query #" << (q + 1) << " | CACHE HIT (exact) | Results: " << match.result.neighbors.size();
-                } else {
-                    cache_log << "Query #" << (q + 1) << " | CACHE HIT (similar: vec=" << (match.vector_similarity * 100) 
-                              << "%, range=" << (match.range_similarity * 100) << "%) | Results: " << match.result.neighbors.size();
-                }
-                Logger::log_query("KNN_CACHE", cache_log.str(), cache_duration / 1000.0, match.result.neighbors.size());
-            }
-        }
-        
-        if (!cache_hit) {
-            // Optimized KNN search (parallel or single-threaded)
-            auto knn_start = std::chrono::high_resolution_clock::now();
-            
-            std::ostringstream progress_log;
-            progress_log << "Query #" << (q + 1) << " | Starting KNN search (K=" << k_neighbors << ", Range=[" << q_min << "," << q_max << "])";
-            Logger::log_query("KNN_PROGRESS", progress_log.str(), 0.0, 0);
-            
+    for (int batch_start = 0; batch_start < queries_to_run; batch_start += effective_threads) {
+        int batch_end = std::min(batch_start + effective_threads, queries_to_run);
+        int batch_count = batch_end - batch_start;
+
+        // Per-query state for this batch
+        struct QueryState {
+            int q_min = 0, q_max = 0;
+            bool skipped = false;
+            bool cache_hit = false;
+            std::string query_hash;
+            std::string used_similar_query_id;
+            std::vector<int> retrieved;
             std::vector<DataObject*> knn_results;
-            if (use_parallel) {
-                knn_results = dataTree.search_knn_parallel(query_vec, q_min, q_max, k_neighbors, num_threads, use_memory_index);
-            } else {
-                knn_results = dataTree.search_knn_optimized(query_vec, q_min, q_max, k_neighbors, use_memory_index);
-            }
-            auto knn_end = std::chrono::high_resolution_clock::now();
-            auto query_duration = std::chrono::duration_cast<std::chrono::microseconds>(knn_end - knn_start).count();
-            total_range_time += query_duration;
+            long long search_duration_us = 0;
+        };
+        std::vector<QueryState> states(batch_count);
 
-            // Log individual query performance with detailed breakdown
-            std::ostringstream query_params;
-            query_params << "Query #" << (q + 1) << " | K=" << k_neighbors << " | Range=[" << q_min << "," << q_max << "] | Results: " << knn_results.size() << " | Time: " << (query_duration / 1000.0) << " ms";
-            Logger::log_query("KNN", query_params.str(), query_duration / 1000.0, knn_results.size());
-
-            if (knn_results.empty()) {
-                std::ostringstream empty_log;
-                empty_log << "Query #" << (q + 1) << " | No results found in range [" << q_min << "," << q_max << "]";
-                Logger::log_query("KNN_PROGRESS", empty_log.str(), 0.0, 0);
-                continue;
+        // Phase 1: Range setup + cache check (sequential)
+        for (int t = 0; t < batch_count; t++) {
+            int q = batch_start + t;
+            QueryState& st = states[t];
+            st.q_min = min_key;
+            st.q_max = max_key;
+            if (use_per_query_range && q < static_cast<int>(query_ranges.size())) {
+                st.q_min = query_ranges[q].first;
+                st.q_max = query_ranges[q].second;
+                if (st.q_min > st.q_max) {
+                    st.skipped = true;
+                    continue;
+                }
             }
 
-            // Results are already sorted by distance, prepare cache data
-            auto cache_prep_start = std::chrono::high_resolution_clock::now();
-            std::vector<CachedNeighbor> results_for_cache;
-            for (size_t i = 0; i < knn_results.size(); i++) {
-                int key = knn_results[i]->is_int_value() ? 
-                    knn_results[i]->get_int_value() : 
-                    static_cast<int>(knn_results[i]->get_float_value());
-                // Use original fvecs file index for recall (groundtruth stores vector indices, not keys)
-                retrieved.push_back(static_cast<int>(knn_results[i]->get_id()));
-                
-                CachedNeighbor neighbor;
-                neighbor.vector = knn_results[i]->get_vector();
-                neighbor.key = key;
-                neighbor.distance = calculate_distance(query_vec, neighbor.vector);
-                results_for_cache.push_back(neighbor);
-            }
-            auto cache_prep_end = std::chrono::high_resolution_clock::now();
-            auto cache_prep_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_prep_end - cache_prep_start).count();
+            st.query_hash = cache.compute_query_hash(queries[q], st.q_min, st.q_max);
 
-            // Store in cache (pass used_similar_query_id to skip caching if we used similar results)
-            auto cache_store_start = std::chrono::high_resolution_clock::now();
-            if (cache_enabled && !results_for_cache.empty()) {
-                cache.store_result(query_hash, query_vec, q_min, q_max, k_neighbors, results_for_cache, used_similar_query_id);
-            }
-            auto cache_store_end = std::chrono::high_resolution_clock::now();
-            auto cache_store_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_store_end - cache_store_start).count();
+            if (cache_enabled) {
+                SimilarityThresholds thresholds(vec_sim_threshold, range_sim_threshold);
+                auto cache_start = std::chrono::high_resolution_clock::now();
+                SimilarCacheMatch match = cache.find_similar_cached_result(
+                    queries[q], st.q_min, st.q_max, k_neighbors, thresholds);
+                auto cache_end = std::chrono::high_resolution_clock::now();
+                long long cache_duration = std::chrono::duration_cast<std::chrono::microseconds>(cache_end - cache_start).count();
 
-            // Log post-processing times
-            std::ostringstream postproc_log;
-            postproc_log << "Query #" << (q + 1) << " | Post-processing: prep=" << (cache_prep_duration / 1000.0) << "ms, cache_store=" << (cache_store_duration / 1000.0) << "ms";
-            Logger::log_query("KNN_PROGRESS", postproc_log.str(), 0.0, 0);
-
-            // Clean up
-            for (DataObject* obj : knn_results) {
-                delete obj;
+                if (match.found) {
+                    st.cache_hit = true;
+                    st.used_similar_query_id = match.query_id;
+                    total_range_time += cache_duration;
+                    // NOTE: Cache doesn't store original_id yet
+                    for (const auto& neighbor : match.result.neighbors) {
+                        st.retrieved.push_back(neighbor.key);
+                    }
+                    cache_hits++;
+                    std::ostringstream cache_log;
+                    if (match.vector_similarity >= 1.0 && match.range_similarity >= 1.0) {
+                        cache_log << "Query #" << (q + 1) << " | CACHE HIT (exact) | Results: " << match.result.neighbors.size();
+                    } else {
+                        cache_log << "Query #" << (q + 1) << " | CACHE HIT (similar: vec=" << (match.vector_similarity * 100)
+                                  << "%, range=" << (match.range_similarity * 100) << "%) | Results: " << match.result.neighbors.size();
+                    }
+                    Logger::log_query("KNN_CACHE", cache_log.str(), cache_duration / 1000.0, match.result.neighbors.size());
+                }
             }
         }
 
-        // Calculate recall if groundtruth available
-        if (has_groundtruth && q < static_cast<int>(groundtruth.size())) {
-            double recall = calculate_recall(retrieved, groundtruth[q], k_neighbors);
-            total_recall += recall;
-            valid_queries++;
+        // Phase 2: Search (parallel or sequential)
+        if (use_parallel) {
+            std::vector<std::thread> threads;
+            for (int t = 0; t < batch_count; t++) {
+                if (states[t].skipped || states[t].cache_hit) continue;
+                int q = batch_start + t;
+                threads.emplace_back([&dataTree, &queries, &states, q, t, k_neighbors, use_memory_index]() {
+                    auto start = std::chrono::high_resolution_clock::now();
+                    states[t].knn_results = dataTree.search_knn_optimized(
+                        queries[q], states[t].q_min, states[t].q_max,
+                        k_neighbors, use_memory_index);
+                    auto end = std::chrono::high_resolution_clock::now();
+                    states[t].search_duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+                });
+            }
+            for (auto& th : threads) th.join();
+        } else {
+            for (int t = 0; t < batch_count; t++) {
+                if (states[t].skipped || states[t].cache_hit) continue;
+                int q = batch_start + t;
+                auto start = std::chrono::high_resolution_clock::now();
+                states[t].knn_results = dataTree.search_knn_optimized(
+                    queries[q], states[t].q_min, states[t].q_max,
+                    k_neighbors, use_memory_index);
+                auto end = std::chrono::high_resolution_clock::now();
+                states[t].search_duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+            }
+        }
+
+        // Phase 3: Post-process (sequential)
+        for (int t = 0; t < batch_count; t++) {
+            int q = batch_start + t;
+            QueryState& st = states[t];
+            if (st.skipped) continue;
+
+            if (!st.cache_hit) {
+                total_range_time += st.search_duration_us;
+
+                std::ostringstream query_params;
+                query_params << "Query #" << (q + 1) << " | K=" << k_neighbors
+                             << " | Range=[" << st.q_min << "," << st.q_max << "] | Results: "
+                             << st.knn_results.size() << " | Time: " << (st.search_duration_us / 1000.0) << " ms";
+                Logger::log_query("KNN", query_params.str(), st.search_duration_us / 1000.0, st.knn_results.size());
+
+                if (!st.knn_results.empty()) {
+                    std::vector<CachedNeighbor> results_for_cache;
+                    for (size_t i = 0; i < st.knn_results.size(); i++) {
+                        int key = st.knn_results[i]->is_int_value() ?
+                            st.knn_results[i]->get_int_value() :
+                            static_cast<int>(st.knn_results[i]->get_float_value());
+                        st.retrieved.push_back(static_cast<int>(st.knn_results[i]->get_id()));
+                        CachedNeighbor neighbor;
+                        neighbor.vector = st.knn_results[i]->get_vector();
+                        neighbor.key = key;
+                        neighbor.distance = calculate_distance(queries[q], neighbor.vector);
+                        results_for_cache.push_back(neighbor);
+                    }
+                    if (cache_enabled) {
+                        cache.store_result(st.query_hash, queries[q], st.q_min, st.q_max,
+                                           k_neighbors, results_for_cache, st.used_similar_query_id);
+                    }
+                }
+                for (DataObject* obj : st.knn_results) {
+                    delete obj;
+                }
+            }
+
+            // Calculate recall
+            if (has_groundtruth && q < static_cast<int>(groundtruth.size())) {
+                if (groundtruth[q].empty()) {
+                    // Empty groundtruth: correct only if search returned nothing
+                    total_recall += st.retrieved.empty() ? 1.0 : 0.0;
+                } else {
+                    total_recall += calculate_recall(st.retrieved, groundtruth[q], k_neighbors);
+                }
+                valid_queries++;
+            }
         }
 
         // Progress
-        if ((q + 1) % 10 == 0 || q == queries_to_run - 1) {
-            std::cout << "\rProgress: " << (q + 1) << "/" << queries_to_run << " queries" << std::flush;
+        if (batch_end % 10 == 0 || batch_end >= queries_to_run) {
+            std::cout << "\rProgress: " << batch_end << "/" << queries_to_run << " queries" << std::flush;
         }
     }
     std::cout << std::endl;
