@@ -20,7 +20,7 @@ void print_usage(const char* program_name) {
     std::cout << "  --input, -i              Path to the input .fvecs file" << std::endl;
     std::cout << "  --index, -o              Path to the index directory (will contain index.bpt and .cache/)" << std::endl;
     std::cout << "  --order                  B+ tree order (default: auto-calculated based on vector dimension)" << std::endl;
-    std::cout << "  --batch-size             Number of vectors to process in each batch (default: 10)" << std::endl;
+    std::cout << "  --batch-size             Number of vectors to read and process per chunk (default: 10000)" << std::endl;
     std::cout << "  --max-cache-size         Maximum cache size in MB (default: 100)" << std::endl;
     std::cout << "  --label-path                  Path to label JSON file for RFANN mode (optional)" << std::endl;
     std::cout << "                           Format: [42, 17, 99, ...] one integer per vector" << std::endl;
@@ -42,7 +42,7 @@ void print_usage(const char* program_name) {
 int main(int argc, char* argv[]) {
     std::string input_path;
     std::string index_dir;
-    int batch_size = 10;  // Reduced default batch size for memory efficiency
+    int batch_size = 10000;
     int custom_order = 0;  // 0 = auto-calculate
     std::string label_path;
     bool has_input = false;
@@ -162,7 +162,7 @@ int main(int argc, char* argv[]) {
     int vector_count = 0;
 
     if (has_label) {
-        // RFANN Mode: Load labels, build DataObjects directly, sort in-place, bulk load
+        // RFANN Mode: Load labels, read vectors in chunks, sort each chunk by label, insert
         std::cout << "RFANN Mode: Sorting vectors by label from " << label_path << std::endl;
         Logger::info("RFANN Mode: reading labels from " + label_path);
 
@@ -181,140 +181,141 @@ int main(int argc, char* argv[]) {
             label_file.close();
             labels = j.get<std::vector<int>>();
         }
-        std::cout << "Loaded " << labels.size() << " labels" << std::endl;
+        size_t total_labels = labels.size();
+        std::cout << "Loaded " << total_labels << " labels" << std::endl;
 
-        // Build DataObjects directly from fvecs file (single allocation, no intermediate copy)
-        std::vector<DataObject> objects;
-        objects.reserve(labels.size());
-        int32_t current_dim;
-        size_t vec_idx = 0;
-        while (file.read(reinterpret_cast<char*>(&current_dim), sizeof(int32_t))) {
-            std::vector<float> vec(current_dim);
-            if (!file.read(reinterpret_cast<char*>(vec.data()), current_dim * sizeof(float))) break;
-            if (vec_idx < labels.size()) {
-                objects.emplace_back(std::move(vec), labels[vec_idx]);
-                objects.back().set_id(static_cast<int32_t>(vec_idx));
+        // Process vectors in chunks of batch_size
+        size_t global_idx = 0;
+        int chunk_num = 0;
+
+        while (global_idx < total_labels) {
+            size_t chunk_end = std::min(global_idx + static_cast<size_t>(batch_size), total_labels);
+            size_t chunk_size = chunk_end - global_idx;
+            chunk_num++;
+
+            // Read chunk_size vectors from file
+            std::vector<DataObject> objects;
+            objects.reserve(chunk_size);
+
+            for (size_t i = 0; i < chunk_size; i++) {
+                int32_t current_dim;
+                if (!file.read(reinterpret_cast<char*>(&current_dim), sizeof(int32_t))) {
+                    std::cerr << "Error: Unexpected end of fvecs file at vector " << global_idx << std::endl;
+                    file.close();
+                    Logger::close();
+                    return 1;
+                }
+                std::vector<float> vec(current_dim);
+                if (!file.read(reinterpret_cast<char*>(vec.data()), current_dim * sizeof(float))) {
+                    std::cerr << "Error: Failed to read vector " << global_idx << std::endl;
+                    file.close();
+                    Logger::close();
+                    return 1;
+                }
+                objects.emplace_back(std::move(vec), labels[global_idx]);
+                objects.back().set_id(static_cast<int32_t>(global_idx));
+                global_idx++;
             }
-            vec_idx++;
+
+            // Permutation-based sort: sort lightweight indices by label, then reorder DataObjects
+            int N = static_cast<int>(objects.size());
+
+            std::vector<int> keys(N);
+            for (int i = 0; i < N; i++) {
+                keys[i] = objects[i].is_int_value() ? objects[i].get_int_value()
+                                                    : static_cast<int>(objects[i].get_float_value());
+            }
+
+            std::vector<int> perm(N);
+            std::iota(perm.begin(), perm.end(), 0);
+            std::sort(perm.begin(), perm.end(), [&keys](int a, int b) { return keys[a] < keys[b]; });
+
+            // Apply permutation in-place (each DataObject moved at most once)
+            std::vector<bool> placed(N, false);
+            for (int i = 0; i < N; i++) {
+                if (placed[i] || perm[i] == i) continue;
+                DataObject temp = std::move(objects[i]);
+                int j = i;
+                while (perm[j] != i) {
+                    objects[j] = std::move(objects[perm[j]]);
+                    placed[j] = true;
+                    j = perm[j];
+                }
+                objects[j] = std::move(temp);
+                placed[j] = true;
+            }
+
+            // Insert sorted chunk into B+ tree
+            for (int i = 0; i < N; i++) {
+                try {
+                    dataTree.insert_data_object(objects[i]);
+                } catch (const std::exception& e) {
+                    std::cerr << "ERROR inserting vector: " << e.what() << std::endl;
+                    Logger::error("ERROR inserting vector: " + std::string(e.what()));
+                    file.close();
+                    Logger::close();
+                    return 1;
+                }
+            }
+            vector_count += N;
+
+            auto current_time = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time);
+            std::cout << "Chunk " << chunk_num << ": inserted " << N
+                      << " vectors (total: " << vector_count << ", " << elapsed.count() << " ms)" << std::endl;
+            Logger::info("Chunk " + std::to_string(chunk_num) + ": inserted " + std::to_string(N) +
+                         " vectors (total: " + std::to_string(vector_count) + ")");
         }
         file.close();
-        std::cout << "Loaded " << objects.size() << " vectors directly into DataObjects" << std::endl;
-
-        if (labels.size() != objects.size()) {
-            std::cerr << "Error: Label count (" << labels.size() << ") != vector count (" << objects.size() << ")" << std::endl;
-            Logger::close();
-            return 1;
-        }
-
-        int N = static_cast<int>(objects.size());
-
-        // Permutation-based sort: sort lightweight indices, then reorder DataObjects in one pass.
-        // This keeps the O(N log N) sort phase operating on 4-byte ints (cache-friendly),
-        // and does a single O(N) pass of DataObject moves at the end.
-        std::cout << "Sorting " << N << " vectors by label (permutation sort)..." << std::endl;
-        Logger::info("Sorting " + std::to_string(N) + " vectors by label (permutation sort)");
-
-        // Extract keys once into a flat array for cache-friendly comparisons
-        std::vector<int> keys(N);
-        for (int i = 0; i < N; i++) {
-            keys[i] = labels[i];
-        }
-
-        // Free labels early — no longer needed
-        labels.clear();
-        labels.shrink_to_fit();
-
-        // Sort a permutation array by key value (only 4-byte ints are compared/swapped)
-        std::vector<int> perm(N);
-        std::iota(perm.begin(), perm.end(), 0);
-        std::sort(perm.begin(), perm.end(), [&keys](int a, int b) { return keys[a] < keys[b]; });
-
-        // Apply permutation in-place using cycle-following (each DataObject moved at most once)
-        std::vector<bool> placed(N, false);
-        for (int i = 0; i < N; i++) {
-            if (placed[i] || perm[i] == i) continue;
-            DataObject temp = std::move(objects[i]);
-            int j = i;
-            while (perm[j] != i) {
-                objects[j] = std::move(objects[perm[j]]);
-                placed[j] = true;
-                j = perm[j];
-            }
-            objects[j] = std::move(temp);
-            placed[j] = true;
-        }
-
-        // Free sort temporaries
-        keys.clear();
-        keys.shrink_to_fit();
-        perm.clear();
-        perm.shrink_to_fit();
-
-        std::cout << "Bulk loading " << N << " vectors into B+ tree..." << std::endl;
-        Logger::info("Starting bulk load of " + std::to_string(N) + " vectors");
-        try {
-            dataTree.bulk_load(objects);
-        } catch (const std::exception& e) {
-            std::cerr << "ERROR during bulk load: " << e.what() << std::endl;
-            Logger::error("ERROR during bulk load: " + std::string(e.what()));
-            Logger::close();
-            return 1;
-        }
-        vector_count = N;
     } else {
-        // Standard Mode: Process vectors one by one, key = file order position
-        int32_t current_dim;
-        while (file.read(reinterpret_cast<char*>(&current_dim), sizeof(int32_t))) {
-            if (current_dim != dimension) {
-                std::cerr << "Warning: Inconsistent dimension at vector " << vector_count 
-                          << " (expected " << dimension << ", got " << current_dim << ")" << std::endl;
+        // Standard Mode: Read vectors in chunks, key = file order position (no sort needed)
+        int chunk_num = 0;
+
+        while (true) {
+            std::vector<DataObject> objects;
+            objects.reserve(batch_size);
+
+            for (int i = 0; i < batch_size; i++) {
+                int32_t current_dim;
+                if (!file.read(reinterpret_cast<char*>(&current_dim), sizeof(int32_t))) {
+                    break; // EOF
+                }
+                if (current_dim != dimension) {
+                    std::cerr << "Warning: Inconsistent dimension at vector " << vector_count
+                              << " (expected " << dimension << ", got " << current_dim << ")" << std::endl;
+                }
+                std::vector<float> vec(current_dim);
+                if (!file.read(reinterpret_cast<char*>(vec.data()), current_dim * sizeof(float))) {
+                    std::cerr << "Error: Failed to read vector " << vector_count << std::endl;
+                    break;
+                }
+                objects.emplace_back(std::move(vec), vector_count);
+                objects.back().set_id(static_cast<int32_t>(vector_count));
+                vector_count++;
             }
-            
-            std::vector<float> vec(current_dim);
-            if (!file.read(reinterpret_cast<char*>(vec.data()), current_dim * sizeof(float))) {
-                std::cerr << "Error: Failed to read vector " << vector_count << std::endl;
-                break;
+
+            if (objects.empty()) break;
+            chunk_num++;
+
+            // Keys are sequential — no sort needed
+            for (size_t i = 0; i < objects.size(); i++) {
+                try {
+                    dataTree.insert_data_object(objects[i]);
+                } catch (const std::exception& e) {
+                    std::cerr << "ERROR inserting vector " << objects[i].get_int_value() << ": " << e.what() << std::endl;
+                    Logger::error("ERROR inserting vector: " + std::string(e.what()));
+                    file.close();
+                    Logger::close();
+                    return 1;
+                }
             }
-            
-            int key = vector_count;
-            
-            try {
-                DataObject obj(vec, key);
-                obj.set_id(static_cast<int32_t>(vector_count));
-                dataTree.insert_data_object(obj);
-            } catch (const std::exception& e) {
-                std::string error_msg = "ERROR inserting vector " + std::to_string(key) + ": " + e.what();
-                std::cerr << error_msg << std::endl;
-                Logger::error(error_msg);
-                file.close();
-                Logger::close();
-                return 1;
-            } catch (...) {
-                std::string error_msg = "UNKNOWN ERROR inserting vector " + std::to_string(key);
-                std::cerr << error_msg << std::endl;
-                Logger::error(error_msg);
-                file.close();
-                Logger::close();
-                return 1;
-            }
-            
-            vector_count++;
-            
-            if (vector_count % 1000 == 0) {
-                std::cout << "Progress: " << vector_count << " vectors inserted" << std::endl;
-                Logger::info("Progress: " + std::to_string(vector_count) + " vectors inserted");
-            }
-            
-            if (vector_count % 10000 == 0) {
-                auto current_time = std::chrono::high_resolution_clock::now();
-                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time);
-                double rate = vector_count / (elapsed.count() / 1000.0);
-                Logger::log_performance("Batch insertion", elapsed.count(), 
-                    std::to_string(vector_count) + " vectors, " + std::to_string(rate) + " vectors/sec");
-            }
-            
-            vec.clear();
-            vec.shrink_to_fit();
+
+            auto current_time = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time);
+            std::cout << "Chunk " << chunk_num << ": inserted " << objects.size()
+                      << " vectors (total: " << vector_count << ", " << elapsed.count() << " ms)" << std::endl;
+            Logger::info("Chunk " + std::to_string(chunk_num) + ": inserted " + std::to_string(objects.size()) +
+                         " vectors (total: " + std::to_string(vector_count) + ")");
         }
         file.close();
     }
