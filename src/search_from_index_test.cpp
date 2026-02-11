@@ -422,9 +422,8 @@ int main(int argc, char* argv[]) {
                     st.cache_hit = true;
                     st.used_similar_query_id = match.query_id;
                     total_query_time_sum += cache_duration;
-                    // NOTE: Cache doesn't store original_id yet
                     for (const auto& neighbor : match.result.neighbors) {
-                        st.retrieved.push_back(neighbor.key);
+                        st.retrieved.push_back(static_cast<int>(neighbor.original_id));
                     }
                     cache_hits++;
                     std::ostringstream cache_log;
@@ -493,6 +492,7 @@ int main(int argc, char* argv[]) {
                         CachedNeighbor neighbor;
                         neighbor.vector = st.knn_results[i]->get_vector();
                         neighbor.key = key;
+                        neighbor.original_id = st.knn_results[i]->get_id();
                         neighbor.distance = calculate_distance(queries[q], neighbor.vector);
                         results_for_cache.push_back(neighbor);
                     }

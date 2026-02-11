@@ -162,7 +162,8 @@ void QueryCache::invalidate_for_key(int key) {
 }
 
 int QueryCache::update_for_inserted_object(int key, const std::vector<float>& vector,
-                                            std::function<double(const std::vector<float>&, const std::vector<float>&)> distance_fn) {
+                                            std::function<double(const std::vector<float>&, const std::vector<float>&)> distance_fn,
+                                            int32_t original_id) {
     if (!enabled_) return 0;
     
     // Find all queries whose range contains this key
@@ -190,6 +191,7 @@ int QueryCache::update_for_inserted_object(int key, const std::vector<float>& ve
             CachedNeighbor new_neighbor;
             new_neighbor.vector = vector;
             new_neighbor.key = key;
+            new_neighbor.original_id = original_id;
             new_neighbor.distance = new_dist;
             
             // Find insertion position (keep sorted by distance)
@@ -352,6 +354,7 @@ bool QueryCache::load_query_result(const std::string& query_id, CachedQueryResul
         result.neighbors[i].vector.resize(neighbor_vec_size);
         file.read(reinterpret_cast<char*>(result.neighbors[i].vector.data()), neighbor_vec_size * sizeof(float));
         file.read(reinterpret_cast<char*>(&result.neighbors[i].key), sizeof(int));
+        file.read(reinterpret_cast<char*>(&result.neighbors[i].original_id), sizeof(int32_t));
         file.read(reinterpret_cast<char*>(&result.neighbors[i].distance), sizeof(double));
     }
     
@@ -381,6 +384,7 @@ void QueryCache::save_query_result(const CachedQueryResult& result) {
         file.write(reinterpret_cast<const char*>(&neighbor_vec_size), sizeof(neighbor_vec_size));
         file.write(reinterpret_cast<const char*>(neighbor.vector.data()), neighbor_vec_size * sizeof(float));
         file.write(reinterpret_cast<const char*>(&neighbor.key), sizeof(int));
+        file.write(reinterpret_cast<const char*>(&neighbor.original_id), sizeof(int32_t));
         file.write(reinterpret_cast<const char*>(&neighbor.distance), sizeof(double));
     }
 }

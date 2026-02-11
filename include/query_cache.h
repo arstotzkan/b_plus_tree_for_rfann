@@ -14,6 +14,7 @@
 struct CachedNeighbor {
     std::vector<float> vector;
     int key;
+    int32_t original_id = -1;  // Original fvecs vector index (for recall calculation)
     double distance;  // Distance from query vector
 };
 
@@ -92,7 +93,8 @@ public:
     // Update cache when a new DataObject is inserted into the tree
     // Returns number of caches updated
     int update_for_inserted_object(int key, const std::vector<float>& vector,
-                                   std::function<double(const std::vector<float>&, const std::vector<float>&)> distance_fn);
+                                   std::function<double(const std::vector<float>&, const std::vector<float>&)> distance_fn,
+                                   int32_t original_id = -1);
 
     // Update cache when a DataObject is deleted from the tree
     // Returns number of caches updated

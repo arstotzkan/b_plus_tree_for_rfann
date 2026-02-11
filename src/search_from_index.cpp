@@ -348,6 +348,7 @@ int main(int argc, char* argv[]) {
                 neighbor.key = results[i]->is_int_value() ? 
                     results[i]->get_int_value() : 
                     static_cast<int>(results[i]->get_float_value());
+                neighbor.original_id = results[i]->get_id();
                 neighbor.distance = dist;
                 results_for_cache.push_back(neighbor);
             }

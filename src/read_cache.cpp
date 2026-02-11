@@ -72,7 +72,7 @@ void display_query_detailed(const std::string& query_id, const CachedQueryResult
     for (size_t i = 0; i < result.neighbors.size(); i++) {
         const auto& neighbor = result.neighbors[i];
         std::cout << "  #" << (i+1) << " (dist=" << std::fixed << std::setprecision(4) << neighbor.distance << "): ";
-        std::cout << format_vector(neighbor.vector, 8) << "  (key=" << neighbor.key << ")" << std::endl;
+        std::cout << format_vector(neighbor.vector, 8) << "  (key=" << neighbor.key << ", id=" << neighbor.original_id << ")" << std::endl;
     }
     std::cout << std::endl;
 }
