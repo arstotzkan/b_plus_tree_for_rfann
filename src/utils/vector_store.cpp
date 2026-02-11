@@ -438,51 +438,87 @@ bool VectorStore::loadAllVectorsIntoMemory(size_t max_memory_mb) {
     size_t last_progress = 0;
     size_t memory_used = 0;
     const size_t memory_limit_bytes = max_memory_mb * 1024 * 1024;
+    const size_t BATCH_SIZE = 100000;  // Read ~100k vectors per I/O batch
+    const size_t RECORD_HEADER_SIZE = sizeof(uint32_t) + sizeof(uint64_t) + sizeof(int32_t);  // 16 bytes
     
-    for (const auto& pair : sorted_meta) {
-        // Check memory limit before loading next vector
+    size_t idx = 0;
+    while (idx < sorted_meta.size()) {
+        // Check memory limit
         if (max_memory_mb > 0 && memory_used >= memory_limit_bytes) {
             std::cout << "Memory limit reached at " << loaded << " vectors (" << (memory_used / (1024*1024)) << " MB)" << std::endl;
             break;
         }
         
-        uint64_t vector_id = pair.first;
-        const VectorMetadata& meta = pair.second;
+        // Build a contiguous batch: find consecutive vectors with no gaps on disk
+        size_t batch_start = idx;
+        size_t batch_end = idx + 1;
+        uint64_t region_start_offset = sorted_meta[batch_start].second.offset;
         
-        CachedVector cached;
-        cached.size = meta.size;
-        cached.next_id = meta.next_id;
-        cached.original_id = meta.original_id;
-        cached.data.resize(meta.size);
+        while (batch_end < sorted_meta.size() && (batch_end - batch_start) < BATCH_SIZE) {
+            const VectorMetadata& prev_meta = sorted_meta[batch_end - 1].second;
+            uint64_t expected_next_offset = prev_meta.offset + RECORD_HEADER_SIZE + prev_meta.size * sizeof(float);
+            if (sorted_meta[batch_end].second.offset != expected_next_offset) {
+                break;  // Gap detected, end this batch
+            }
+            batch_end++;
+        }
         
-        // Seek to vector data
-        file_.seekg(meta.offset);
+        size_t batch_count = batch_end - batch_start;
+        
+        // Calculate total byte size of this contiguous region
+        const VectorMetadata& last_meta = sorted_meta[batch_end - 1].second;
+        uint64_t region_end = last_meta.offset + RECORD_HEADER_SIZE + last_meta.size * sizeof(float);
+        size_t region_size = static_cast<size_t>(region_end - region_start_offset);
+        
+        // Single I/O read for the entire batch
+        std::vector<char> read_buffer(region_size);
+        file_.seekg(region_start_offset);
         if (!file_.good()) {
-            std::cerr << "Error seeking to vector " << vector_id << " at offset " << meta.offset << std::endl;
+            std::cerr << "Error seeking to batch at offset " << region_start_offset << std::endl;
+            return false;
+        }
+        file_.read(read_buffer.data(), region_size);
+        if (!file_.good()) {
+            std::cerr << "Error reading batch of " << batch_count << " vectors (" << region_size << " bytes)" << std::endl;
             return false;
         }
         
-        // Skip stored_size (4 bytes) + next_id (8 bytes) + original_id (4 bytes) - we have them in metadata
-        file_.seekg(sizeof(uint32_t) + sizeof(uint64_t) + sizeof(int32_t), std::ios::cur);
-        
-        // Bulk read entire vector at once
-        file_.read(reinterpret_cast<char*>(cached.data.data()), meta.size * sizeof(float));
-        if (!file_.good()) {
-            std::cerr << "Error reading data for vector " << vector_id << std::endl;
-            return false;
+        // Parse individual vectors from the buffer
+        for (size_t b = batch_start; b < batch_end; b++) {
+            if (max_memory_mb > 0 && memory_used >= memory_limit_bytes) {
+                std::cout << "Memory limit reached at " << loaded << " vectors (" << (memory_used / (1024*1024)) << " MB)" << std::endl;
+                goto done;
+            }
+            
+            uint64_t vector_id = sorted_meta[b].first;
+            const VectorMetadata& meta = sorted_meta[b].second;
+            size_t buf_offset = static_cast<size_t>(meta.offset - region_start_offset);
+            
+            CachedVector cached;
+            cached.size = meta.size;
+            cached.next_id = meta.next_id;
+            cached.original_id = meta.original_id;
+            cached.data.resize(meta.size);
+            
+            // Skip record header (16 bytes), copy float data from buffer
+            std::memcpy(cached.data.data(), read_buffer.data() + buf_offset + RECORD_HEADER_SIZE, 
+                        meta.size * sizeof(float));
+            
+            memory_used += meta.size * sizeof(float) + 48;
+            memory_cache_[vector_id] = std::move(cached);
+            loaded++;
+            
+            // Progress logging every 10%
+            size_t progress = (loaded * 100) / total_vectors;
+            if (progress >= last_progress + 10) {
+                std::cout << "  Vector loading progress: " << progress << "% (" << loaded << "/" << total_vectors << ", " << (memory_used / (1024*1024)) << " MB)" << std::endl;
+                last_progress = progress;
+            }
         }
         
-        memory_used += meta.size * sizeof(float) + 48;  // Approximate overhead (includes next_id)
-        memory_cache_[vector_id] = std::move(cached);
-        loaded++;
-        
-        // Progress logging every 10%
-        size_t progress = (loaded * 100) / total_vectors;
-        if (progress >= last_progress + 10) {
-            std::cout << "  Vector loading progress: " << progress << "% (" << loaded << "/" << total_vectors << ", " << (memory_used / (1024*1024)) << " MB)" << std::endl;
-            last_progress = progress;
-        }
+        idx = batch_end;
     }
+    done:
     
     std::cout << "Loaded " << loaded << "/" << total_vectors << " vectors into memory (" << (memory_used / (1024*1024)) << " MB)" << std::endl;
     memory_cache_loaded_ = true;
