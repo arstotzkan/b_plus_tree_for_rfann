@@ -38,7 +38,7 @@ set(COMMON_SOURCES
 )
 
 # Build index with synthetic data executable
-add_executable(build_index
+add_executable(build_index_with_synthetic
     build_index_with_synthetic_data.cpp
     ${COMMON_SOURCES}
 )

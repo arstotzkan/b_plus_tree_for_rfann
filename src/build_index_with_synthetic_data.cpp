@@ -11,16 +11,16 @@
 #include <chrono>
 
 void print_usage(const char* program_name) {
-    std::cout << "Usage: " << program_name << " --index <index_dir> --size <count> [options]" << std::endl;
+    std::cout << "Usage: " << program_name << " --index <index_dir> --dataset-size <count> [options]" << std::endl;
     std::cout << "Flags:" << std::endl;
     std::cout << "  --output, -o              Path to the index directory (will contain index.bpt and .cache/)" << std::endl;
-    std::cout << "  --size, -s               Number of synthetic DataObjects to generate and insert" << std::endl;
+    std::cout << "  --dataset-size, -s               Number of synthetic DataObjects to generate and insert" << std::endl;
     std::cout << "  --dimension, -d          Vector dimension (default: 128)" << std::endl;
     std::cout << "  --order                  B+ tree order (default: auto-calculated based on vector dimension)" << std::endl;
     std::cout << "  --max-cache-size         Maximum cache size in MB (default: 100)" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
-    std::cout << "  " << program_name << " --output data/my_index --size 1000" << std::endl;
+    std::cout << "  " << program_name << " --output data/my_index --dataset-size 1000" << std::endl;
     std::cout << std::endl;
 }
 
@@ -40,7 +40,7 @@ int main(int argc, char* argv[]) {
         if ((arg == "--output" || arg == "-o") && i + 1 < argc) {
             index_dir = argv[++i];
             has_index = true;
-        } else if ((arg == "--size" || arg == "-s") && i + 1 < argc) {
+        } else if ((arg == "--dataset-size" || arg == "-s") && i + 1 < argc) {
             data_size = std::atoi(argv[++i]);
             has_size = true;
         } else if ((arg == "--dimension" || arg == "-d") && i + 1 < argc) {
