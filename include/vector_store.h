@@ -41,6 +41,17 @@ public:
     void setNextVectorId(uint64_t id) { next_vector_id_ = id; }
     uint32_t getMaxVectorSize() const { return max_vector_size_; }
     
+    // Get the maximum original_id across all stored vectors (-1 if none)
+    int32_t getMaxOriginalId() const {
+        int32_t max_id = -1;
+        for (const auto& pair : metadata_) {
+            if (pair.second.original_id > max_id) {
+                max_id = pair.second.original_id;
+            }
+        }
+        return max_id;
+    }
+    
     // Pre-reserve metadata hash map capacity to avoid rehashing during bulk load
     void reserveMetadata(size_t count) { metadata_.reserve(count); }
     

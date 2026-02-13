@@ -50,6 +50,7 @@ public:
     
     // Vector store access
     VectorStore* getVectorStore() { return vector_store_.get(); }
+    const VectorStore* getVectorStore() const { return vector_store_.get(); }
 
 private:
     std::fstream file_;

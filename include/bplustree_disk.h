@@ -55,6 +55,7 @@ public:
     const BPTreeConfig& getConfig() const { return pm->getConfig(); }
     uint32_t getOrder() const { return pm->getOrder(); }
     uint32_t getMaxVectorSize() const { return pm->getMaxVectorSize(); }
+    int32_t getMaxOriginalId() const { return pm->getVectorStore()->getMaxOriginalId(); }
 
 private:
     std::unique_ptr<PageManager> pm;
