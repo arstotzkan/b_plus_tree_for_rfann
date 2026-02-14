@@ -130,7 +130,7 @@ After building, the following executables are available:
 
 | Executable | Description |
 |------------|-------------|
-| `build_index` | Build index from synthetic data |
+| `build_index_with_synthetic` | Build index from synthetic data |
 | `build_index_fvecs` | Build index from FVECS file |
 | `search_index` | Interactive search (range/value/KNN) |
 | `search_index_test` | Batch benchmark with groundtruth |
@@ -139,18 +139,18 @@ After building, the following executables are available:
 | `read_cache` | Inspect cached queries |
 | `clear_cache` | Clear all cached queries |
 
-### build_index
+### build_index_with_synthetic
 
 Build a B+ tree index from synthetic random data.
 
 ```bash
-build_index --index <dir> --size <count> [options]
+build_index_with_synthetic --output <dir> --dataset-size <count> [options]
 ```
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--index` | `-o` | Path to index directory (required) |
-| `--size` | `-s` | Number of synthetic objects to generate (required) |
+| `--output` | `-o` | Path to index directory (required) |
+| `--dataset-size` | `-s` | Number of synthetic objects to generate (required) |
 | `--dimension` | `-d` | Vector dimension (default: 128) |
 | `--order` | | B+ tree order (default: auto-calculated) |
 | `--max-cache-size` | | Maximum cache size in MB (default: 100) |
@@ -159,10 +159,10 @@ build_index --index <dir> --size <count> [options]
 **Example:**
 ```bash
 # Windows
-.\build\src\Release\build_index.exe --index data\my_index --size 10000 --dimension 128
+.\build\src\Release\build_index_with_synthetic.exe --output data\my_index --dataset-size 10000 --dimension 128
 
 # Linux
-./build/src/build_index --index data/my_index --size 10000 --dimension 128
+./build/src/build_index_with_synthetic --output data/my_index --dataset-size 10000 --dimension 128
 ```
 
 ### build_index_fvecs
@@ -170,25 +170,25 @@ build_index --index <dir> --size <count> [options]
 Build a B+ tree index from a `.fvecs` file (standard vector dataset format).
 
 ```bash
-build_index_fvecs --input <file> --index <dir> [options]
+build_index_fvecs --input <file> --output <dir> [options]
 ```
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--input` | `-i` | Path to input .fvecs file (required) |
-| `--index` | `-o` | Path to index directory (required) |
+| `--output` | `-o` | Path to index directory (required) |
 | `--order` | | B+ tree order (default: auto-calculated) |
-| `--batch-size` | | Vectors per batch (default: 10) |
+| `--batch-size` | | Vectors per batch (default: 10000) |
 | `--max-cache-size` | | Maximum cache size in MB (default: 100) |
 | `--help` | `-h` | Show help message |
 
 **Example:**
 ```bash
 # Windows
-.\build\src\Release\build_index_fvecs.exe --input data\siftsmall_base.fvecs --index data\sift_index
+.\build\src\Release\build_index_fvecs.exe --input data\siftsmall_base.fvecs --output data\sift_index
 
 # Linux
-./build/src/build_index_fvecs --input data/siftsmall_base.fvecs --index data/sift_index
+./build/src/build_index_fvecs --input data/siftsmall_base.fvecs --output data/sift_index
 ```
 
 ### search_index
@@ -365,7 +365,7 @@ clear_cache --index data/my_index --confirm
 # 1. Build index from SIFT base vectors
 ./build/src/build_index_fvecs \
   --input data/siftsmall_base.fvecs \
-  --index data/sift_index
+  --output data/sift_index
 
 # 2. Run single query with caching
 ./build/src/search_index \
