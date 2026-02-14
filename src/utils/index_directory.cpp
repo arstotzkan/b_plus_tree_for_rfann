@@ -63,13 +63,13 @@ bool IndexDirectory::create_default_config(const std::string& config_path) {
     return true;
 }
 
-bool IndexDirectory::save_cache_config(bool cache_enabled) const {
+bool IndexDirectory::save_cache_config(bool cache_enabled, size_t max_cache_size_mb) const {
     std::ofstream file(config_file_);
     if (!file.is_open()) return false;
     
     file << "[cache]\n";
     file << "cache_enabled = " << (cache_enabled ? "true" : "false") << "\n";
-    file << "max_cache_size_mb = 100\n";
+    file << "max_cache_size_mb = " << max_cache_size_mb << "\n";
     file << "\n";
     file << "[index]\n";
     file << "# Index configuration options\n";

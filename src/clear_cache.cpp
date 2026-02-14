@@ -10,12 +10,12 @@ void print_usage(const char* program_name) {
     std::cout << std::endl;
     std::cout << "Flags:" << std::endl;
     std::cout << "  --index, -i     Path to the index directory (required)" << std::endl;
-    std::cout << "  --confirm, -c   Confirm deletion without prompting" << std::endl;
+    std::cout << "  --yes, -y   Confirm deletion without prompting" << std::endl;
     std::cout << "  --help, -h      Show this help message" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  Clear cache with prompt:     " << program_name << " --index data/my_index" << std::endl;
-    std::cout << "  Clear cache without prompt:  " << program_name << " --index data/my_index --confirm" << std::endl;
+    std::cout << "  Clear cache without prompt:  " << program_name << " --index data/my_index --yes" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -30,7 +30,7 @@ int main(int argc, char* argv[]) {
         if ((arg == "--index" || arg == "-i") && i + 1 < argc) {
             index_dir = argv[++i];
             has_index = true;
-        } else if (arg == "--confirm" || arg == "-c") {
+        } else if (arg == "--yes" || arg == "-y") {
             auto_confirm = true;
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);

@@ -3,50 +3,44 @@
 #include <cstddef>
 #include <algorithm>
 
-// B+ Tree runtime configuration
+// B+ tree runtime configuration
+// seperate vector storage: vectors are always stored separately in VectorStore
 struct BPTreeConfig {
     uint32_t page_size;
     uint32_t order;
-    uint32_t max_vector_size;
+    uint32_t max_vector_size;  // Max dimension of vectors (for VectorStore)
     uint32_t magic;  // Magic number to identify valid config
-    uint32_t use_separate_storage;  // 0 = inline vectors (default), 1 = separate file
     
-    static constexpr uint32_t MAGIC_NUMBER = 0x42505433;  // "BPT3"
+    static constexpr uint32_t MAGIC_NUMBER = 0x42505434;  // "BPT4" - new version for seperate vector storage
     
-    BPTreeConfig() : page_size(8192), order(4), max_vector_size(128), magic(MAGIC_NUMBER), use_separate_storage(0) {}
+    BPTreeConfig() : page_size(8192), order(4), max_vector_size(128), magic(MAGIC_NUMBER) {}
     
     BPTreeConfig(uint32_t order_, uint32_t max_vec_size_) 
-        : order(order_), max_vector_size(max_vec_size_), magic(MAGIC_NUMBER), use_separate_storage(0) {
+        : order(order_), max_vector_size(max_vec_size_), magic(MAGIC_NUMBER) {
         // Auto-calculate minimum page size needed
         page_size = calculate_min_page_size();
     }
     
-    // Calculate the minimum page size needed for a BPlusNode with this config
+    // calculate the minimum page size needed for a BPlusNode  with this config
+    // seperate vector storage layout: unique keys with vector list references
     size_t calculate_node_size() const {
-        // BPlusNode layout:
-        // - isLeaf: 1 byte (padded to 4)
-        // - keyCount: 2 bytes (padded to 4)  
+        // BPlusNode  layout (seperate vector storage):
+        // - isLeaf: 4 bytes (padded)
+        // - keyCount: 4 bytes (padded)  
         // - keys[order]: order * 4 bytes
         // - children[order+1]: (order+1) * 4 bytes
         // - next: 4 bytes
-        // - vector_sizes[order]: order * 4 bytes
-        // - For inline storage: data_vectors[order][max_vector_size]: order * max_vector_size * 4 bytes
-        // - For separate storage: vector_ids[order]: order * 8 bytes
+        // - vector_list_ids[order]: order * 8 bytes (first vector ID for each key)
+        // - vector_counts[order]: order * 4 bytes (count of vectors per key)
         
         size_t fixed_overhead = 4 + 4;  // isLeaf + keyCount (with padding)
         size_t keys_size = order * sizeof(int);
         size_t children_size = (order + 1) * sizeof(uint32_t);
         size_t next_size = sizeof(uint32_t);
-        size_t vector_sizes_size = order * sizeof(int);
+        size_t vector_list_ids_size = order * sizeof(uint64_t);
+        size_t vector_counts_size = order * sizeof(uint32_t);
         
-        size_t vector_data_size;
-        if (use_separate_storage) {
-            vector_data_size = order * sizeof(uint64_t);  // vector_ids
-        } else {
-            vector_data_size = order * max_vector_size * sizeof(float);  // inline vectors
-        }
-        
-        return fixed_overhead + keys_size + children_size + next_size + vector_sizes_size + vector_data_size;
+        return fixed_overhead + keys_size + children_size + next_size + vector_list_ids_size + vector_counts_size;
     }
     
     uint32_t calculate_min_page_size() const {
@@ -63,14 +57,14 @@ struct BPTreeConfig {
         return magic == MAGIC_NUMBER && order > 0 && max_vector_size > 0 && page_size >= calculate_min_page_size();
     }
     
-    // Suggest optimal order for a given vector size and target page size
-    static uint32_t suggest_order(uint32_t max_vec_size, uint32_t target_page_size = 8192, uint32_t use_separate_storage = 0) {
-        // Start with order=2 and increase until we exceed page size
+    // suggest optimal order for a given target page size
+    // seperate vector storage: node size is independent of vector dimension (vectors stored separately)
+    static uint32_t suggest_order(uint32_t max_vec_size, uint32_t target_page_size = 8192) {
+        // start with order=2 and increase until we exceed page size
         for (uint32_t o = 2; o <= 64; o++) {
             BPTreeConfig test_config;
             test_config.order = o;
             test_config.max_vector_size = max_vec_size;
-            test_config.use_separate_storage = use_separate_storage;
             if (test_config.calculate_node_size() > target_page_size) {
                 return (o > 2) ? o - 1 : 2;
             }

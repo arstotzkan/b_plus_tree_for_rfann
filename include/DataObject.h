@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <vector>
 #include <variant>
 
@@ -6,18 +7,23 @@ class DataObject {
 private:
     std::vector<float> data_vector;  // Changed to float for SIFT vectors
     std::variant<int, float> numeric_value;
+    int32_t id_ = -1;  // Original index in the fvecs file (-1 = unset)
 
 public:
     // Constructors
     DataObject(const std::vector<float>& vector, int value);
     DataObject(const std::vector<float>& vector, float value);
+    DataObject(std::vector<float>&& vector, int value);    // Move-taking constructor
+    DataObject(std::vector<float>&& vector, float value);  // Move-taking constructor
     DataObject(const std::vector<int>& vector, int value);  // Legacy support
     DataObject(const std::vector<int>& vector, float value);  // Legacy support
     DataObject(int vector_size, int value);  // Size-based constructor
     DataObject(const DataObject& other);
+    DataObject(DataObject&& other) noexcept;  // Move constructor
 
-    // Assignment operator
+    // Assignment operators
     DataObject& operator=(const DataObject& other);
+    DataObject& operator=(DataObject&& other) noexcept;  // Move assignment
 
     // Destructor
     ~DataObject();
@@ -29,11 +35,13 @@ public:
     int get_int_value() const;
     float get_float_value() const;
     bool is_int_value() const;
+    int32_t get_id() const { return id_; }
 
     // Setters
     void set_vector_size(size_t new_size);
     void set_int_value(int value);
     void set_float_value(float value);
+    void set_id(int32_t id) { id_ = id; }
 
     // Vector operations
     void set_vector_element(size_t index, float value);

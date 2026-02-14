@@ -32,8 +32,12 @@ public:
     void writeRawPage(uint32_t pid, const char* buffer, size_t size);
     
     uint32_t allocatePage();
+    // Allocate a page without immediately saving the header to disk.
+    // Caller must call saveHeader() or flushHeader() when done with batch allocations.
+    uint32_t allocatePageDeferred();
     uint32_t getRoot();
     void setRoot(uint32_t pid);
+    void setRootDeferred(uint32_t pid);
     
     // Access configuration
     const BPTreeConfig& getConfig() const { return header_.config; }
@@ -46,6 +50,7 @@ public:
     
     // Vector store access
     VectorStore* getVectorStore() { return vector_store_.get(); }
+    const VectorStore* getVectorStore() const { return vector_store_.get(); }
 
 private:
     std::fstream file_;
@@ -53,6 +58,11 @@ private:
     IndexFileHeader header_;
     std::vector<char> page_buffer_;  // Reusable buffer for serialization
     std::unique_ptr<VectorStore> vector_store_;
+    
+    // Batched flush: flush to disk every N writes instead of every write
+    uint32_t writes_since_flush_ = 0;
+    static constexpr uint32_t FLUSH_INTERVAL = 1000;
+    void maybeFlush();
     
     void initNewFile(const BPTreeConfig& config);
     void loadExistingFile();

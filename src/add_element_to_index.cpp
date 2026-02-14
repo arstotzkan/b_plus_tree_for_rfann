@@ -108,6 +108,9 @@ int main(int argc, char* argv[]) {
         // Determine if key is integer or float
         bool is_float_key = key_str.find('.') != std::string::npos;
         
+        // Generate a unique original_id for the new element
+        int32_t new_original_id = dataTree.getMaxOriginalId() + 1;
+        
         DataObject new_obj(vector_data, 0);  // Initialize with dummy value
         if (is_float_key) {
             float key_val = std::stof(key_str);
@@ -118,6 +121,7 @@ int main(int argc, char* argv[]) {
             new_obj = DataObject(vector_data, key_val);
             std::cout << "Adding node with integer key: " << key_val << std::endl;
         }
+        new_obj.set_id(new_original_id);
         
         std::cout << "Vector dimension: " << vector_data.size() << std::endl;
         std::cout << "Vector data: [";
@@ -149,7 +153,7 @@ int main(int argc, char* argv[]) {
             return std::sqrt(sum);
         };
         
-        int updated_caches = cache.update_for_inserted_object(key_for_cache, vector_data, distance_fn);
+        int updated_caches = cache.update_for_inserted_object(key_for_cache, vector_data, distance_fn, new_original_id);
         
         if (updated_caches > 0) {
             std::cout << "Updated " << updated_caches << " cached queries with new closer neighbor" << std::endl;

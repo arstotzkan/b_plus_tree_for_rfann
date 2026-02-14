@@ -119,11 +119,17 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         
+        // Get all vectors under this key to show count
+        int key_for_cache = is_float_key ? static_cast<int>(std::stof(key_str)) : std::stoi(key_str);
+        std::vector<DataObject*> all_vectors = dataTree.search_range(key_for_cache, key_for_cache);
+        size_t vector_count = all_vectors.size();
+        
         // Display found node info
         std::cout << "Found node:" << std::endl;
         std::cout << "  Key: " << key_str << std::endl;
+        std::cout << "  Vectors under this key: " << vector_count << std::endl;
         std::cout << "  Vector dimension: " << found_obj->get_vector().size() << std::endl;
-        std::cout << "  Vector data: [";
+        std::cout << "  First vector data: [";
         const auto& vec = found_obj->get_vector();
         for (size_t i = 0; i < std::min(vec.size(), size_t(5)); i++) {
             std::cout << vec[i];
@@ -132,9 +138,12 @@ int main(int argc, char* argv[]) {
         if (vec.size() > 5) std::cout << ", ... (" << vec.size() << " dims)";
         std::cout << "]" << std::endl;
         
+        // Clean up search_range results
+        for (DataObject* obj : all_vectors) delete obj;
+        all_vectors.clear();
+        
         // Store the vector of the object to be deleted (for cache update)
         std::vector<float> deleted_vector;
-        int key_for_cache = is_float_key ? static_cast<int>(std::stof(key_str)) : std::stoi(key_str);
         
         // Log node removal start
         std::ostringstream remove_log;
@@ -145,6 +154,7 @@ int main(int argc, char* argv[]) {
         std::cout << std::endl;
         
         bool deleted = false;
+        bool deleted_all = false;
         if (has_vector) {
             // Delete specific DataObject matching key + vector
             std::cout << "Deleting specific entry with key " << key_str << " and matching vector..." << std::endl;
@@ -155,10 +165,11 @@ int main(int argc, char* argv[]) {
             deleted_vector = vector_data;
             deleted = dataTree.delete_data_object(obj_to_delete);
         } else {
-            // Delete first entry with this key (use the found object)
-            std::cout << "Deleting first entry with key " << key_str << "..." << std::endl;
+            // Delete ALL entries with this key
+            std::cout << "Deleting all " << vector_count << " vector(s) with key " << key_str << "..." << std::endl;
             deleted_vector = found_obj->get_vector();
-            deleted = dataTree.delete_data_object(*found_obj);
+            deleted = dataTree.delete_data_object(key_for_cache);
+            deleted_all = true;
         }
         
         // Clean up found object after deletion attempt
@@ -189,8 +200,14 @@ int main(int argc, char* argv[]) {
             
             if (verify == nullptr) {
                 std::cout << "Verification: Key " << key_str << " no longer exists in the index." << std::endl;
+            } else if (deleted_all) {
+                std::cerr << "Warning: Key " << key_str << " still found after deleting all entries!" << std::endl;
+                delete verify;
             } else {
-                std::cerr << "Warning: Key " << key_str << " still found after deletion!" << std::endl;
+                // Deleted a single vector; key may still have other vectors
+                std::vector<DataObject*> remaining = dataTree.search_range(key_for_cache, key_for_cache);
+                std::cout << "Verification: Key " << key_str << " still has " << remaining.size() << " vector(s) remaining." << std::endl;
+                for (DataObject* obj : remaining) delete obj;
                 delete verify;
             }
         } else {

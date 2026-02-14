@@ -7,12 +7,14 @@
 #include <fstream>
 #include <ctime>
 #include <functional>
+#include <memory>
 #include "DataObject.h"
 
 // Cached neighbor with distance for sorted storage
 struct CachedNeighbor {
     std::vector<float> vector;
     int key;
+    int32_t original_id = -1;  // Original fvecs vector index (for recall calculation)
     double distance;  // Distance from query vector
 };
 
@@ -91,7 +93,8 @@ public:
     // Update cache when a new DataObject is inserted into the tree
     // Returns number of caches updated
     int update_for_inserted_object(int key, const std::vector<float>& vector,
-                                   std::function<double(const std::vector<float>&, const std::vector<float>&)> distance_fn);
+                                   std::function<double(const std::vector<float>&, const std::vector<float>&)> distance_fn,
+                                   int32_t original_id = -1);
 
     // Update cache when a DataObject is deleted from the tree
     // Returns number of caches updated
@@ -114,7 +117,7 @@ public:
 private:
     std::string index_dir_;
     std::string cache_dir_;
-    std::string inverted_index_path_;
+    std::string interval_tree_path_;
     bool enabled_;
     CacheConfig config_;
 
@@ -139,20 +142,21 @@ private:
     std::unique_ptr<IntervalNode> interval_root_;  // Root of interval tree
 
     void ensure_directories();
-    void load_inverted_index();
-    void save_inverted_index();
+    void load_interval_tree();
+    void save_interval_tree();
 
     std::string get_query_file_path(const std::string& query_id) const;
     void save_query_result(const CachedQueryResult& result);
     void delete_query_result(const std::string& query_id);
 
-    void add_to_inverted_index(const std::string& query_id, int min_key, int max_key);
-    void remove_from_inverted_index(const std::string& query_id);
+    void add_to_interval_tree(const std::string& query_id, int min_key, int max_key);
+    void remove_from_interval_tree(const std::string& query_id);
     
     // Interval tree operations for efficient range queries
     void insert_interval(std::unique_ptr<IntervalNode>& node, int start, int end, const std::string& query_id);
     void remove_interval(std::unique_ptr<IntervalNode>& node, const std::string& query_id);
     void find_overlapping_intervals(const IntervalNode* node, int key, std::vector<std::string>& result) const;
+    void find_overlapping_range(const IntervalNode* node, int min_key, int max_key, std::vector<std::string>& result) const;
     void update_max_end(IntervalNode* node);
     void save_interval_tree(std::ofstream& file, const IntervalNode* node) const;
     void load_interval_tree(std::ifstream& file, std::unique_ptr<IntervalNode>& node);

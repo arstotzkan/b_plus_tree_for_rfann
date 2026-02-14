@@ -12,6 +12,16 @@ DataObject::DataObject(const std::vector<float>& vector, float value)
     : data_vector(vector), numeric_value(value) {
 }
 
+// Move-taking constructor with float vector and int value
+DataObject::DataObject(std::vector<float>&& vector, int value)
+    : data_vector(std::move(vector)), numeric_value(value) {
+}
+
+// Move-taking constructor with float vector and float value
+DataObject::DataObject(std::vector<float>&& vector, float value)
+    : data_vector(std::move(vector)), numeric_value(value) {
+}
+
 // Constructor with int vector and int value (legacy support)
 DataObject::DataObject(const std::vector<int>& vector, int value)
     : numeric_value(value) {
@@ -37,7 +47,12 @@ DataObject::DataObject(int vector_size, int value)
 
 // Copy constructor
 DataObject::DataObject(const DataObject& other)
-    : data_vector(other.data_vector), numeric_value(other.numeric_value) {
+    : data_vector(other.data_vector), numeric_value(other.numeric_value), id_(other.id_) {
+}
+
+// Move constructor
+DataObject::DataObject(DataObject&& other) noexcept
+    : data_vector(std::move(other.data_vector)), numeric_value(other.numeric_value), id_(other.id_) {
 }
 
 // Assignment operator
@@ -45,6 +60,17 @@ DataObject& DataObject::operator=(const DataObject& other) {
     if (this != &other) {
         data_vector = other.data_vector;
         numeric_value = other.numeric_value;
+        id_ = other.id_;
+    }
+    return *this;
+}
+
+// Move assignment operator
+DataObject& DataObject::operator=(DataObject&& other) noexcept {
+    if (this != &other) {
+        data_vector = std::move(other.data_vector);
+        numeric_value = other.numeric_value;
+        id_ = other.id_;
     }
     return *this;
 }

@@ -72,6 +72,7 @@ PageManager::~PageManager() {
     }
     if (file_.is_open()) {
         saveHeader();
+        file_.flush();
         file_.close();
     }
 }
@@ -106,11 +107,9 @@ void PageManager::initNewFile(const BPTreeConfig& config) {
         throw std::runtime_error("Cannot reopen index file: " + filename_);
     }
     
-    // Initialize vector store only if separate storage is enabled
-    if (config.use_separate_storage) {
-        std::string vector_store_filename = filename_ + ".vectors";
-        vector_store_ = std::make_unique<VectorStore>(vector_store_filename, config.max_vector_size);
-    }
+    // always initialize vector store
+    std::string vector_store_filename = filename_ + ".vectors";
+    vector_store_ = std::make_unique<VectorStore>(vector_store_filename, config.max_vector_size);
 }
 
 void PageManager::loadExistingFile() {
@@ -133,11 +132,9 @@ void PageManager::loadExistingFile() {
         header_.total_entries = 0;
     }
     
-    // Initialize vector store only if separate storage is enabled
-    if (header_.config.use_separate_storage) {
-        std::string vector_store_filename = filename_ + ".vectors";
-        vector_store_ = std::make_unique<VectorStore>(vector_store_filename, header_.config.max_vector_size);
-    }
+    // always initialize vector store
+    std::string vector_store_filename = filename_ + ".vectors";
+    vector_store_ = std::make_unique<VectorStore>(vector_store_filename, header_.config.max_vector_size);
 }
 
 void PageManager::saveHeader() {
@@ -148,7 +145,15 @@ void PageManager::saveHeader() {
     
     file_.seekp(0);
     file_.write(header_page.data(), header_.config.page_size);
-    file_.flush();
+    maybeFlush();
+}
+
+void PageManager::maybeFlush() {
+    writes_since_flush_++;
+    if (writes_since_flush_ >= FLUSH_INTERVAL) {
+        file_.flush();
+        writes_since_flush_ = 0;
+    }
 }
 
 void PageManager::readNode(uint32_t pid, BPlusNode& node) {
@@ -173,7 +178,7 @@ void PageManager::writeNode(uint32_t pid, const BPlusNode& node) {
     // Write to page
     file_.seekp(static_cast<std::streamoff>(pid) * header_.config.page_size);
     file_.write(page_buffer_.data(), header_.config.page_size);
-    file_.flush();
+    maybeFlush();
 }
 
 void PageManager::readRawPage(uint32_t pid, char* buffer, size_t size) {
@@ -185,13 +190,12 @@ size_t PageManager::estimateNodeMemoryMB() const {
     uint32_t total_pages = header_.next_free_page;
     if (total_pages <= 1) return 0;
     
-    // Estimate per-node memory: keys + children + vectors + overhead
+    // estimate per-node memory
     size_t per_node_bytes = 
         header_.config.order * sizeof(int) +                    // keys
         (header_.config.order + 1) * sizeof(uint32_t) +         // children
-        header_.config.order * sizeof(int) +                    // vector_sizes
-        header_.config.order * header_.config.max_vector_size * sizeof(float) +  // data_vectors (if inline)
-        header_.config.order * sizeof(uint64_t) +               // vector_ids
+        header_.config.order * sizeof(uint64_t) +               // vector_list_ids
+        header_.config.order * sizeof(uint32_t) +               // vector_counts
         100;  // overhead for std::vector headers, map entry, etc.
     
     return ((total_pages - 1) * per_node_bytes) / (1024 * 1024);
@@ -265,13 +269,17 @@ void PageManager::loadAllNodes(std::unordered_map<uint32_t, BPlusNode>& nodes, s
 void PageManager::writeRawPage(uint32_t pid, const char* buffer, size_t size) {
     file_.seekp(static_cast<std::streamoff>(pid) * header_.config.page_size);
     file_.write(buffer, size);
-    file_.flush();
+    maybeFlush();
 }
 
 uint32_t PageManager::allocatePage() {
     uint32_t pid = header_.next_free_page++;
     saveHeader();
     return pid;
+}
+
+uint32_t PageManager::allocatePageDeferred() {
+    return header_.next_free_page++;
 }
 
 uint32_t PageManager::getRoot() {
@@ -281,4 +289,8 @@ uint32_t PageManager::getRoot() {
 void PageManager::setRoot(uint32_t pid) {
     header_.root_page = pid;
     saveHeader();
+}
+
+void PageManager::setRootDeferred(uint32_t pid) {
+    header_.root_page = pid;
 }
