@@ -29,7 +29,8 @@ constexpr int MAX_ORDER = 64;
 constexpr int MAX_VECTOR_DIM = 2048;
 
 // Dynamic BPlusNode that works with runtime configuration
-// Model B: Each key is unique within a leaf, and struct BPlusNode {
+// Seperate Vector Storage: Each key is unique within a leaf, and maps to a list of vectors in VectorStore
+struct BPlusNode {
     bool isLeaf;
     uint16_t keyCount;
     std::vector<int> keys;              // Unique keys in this node
