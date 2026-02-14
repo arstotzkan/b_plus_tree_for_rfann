@@ -6,7 +6,7 @@ A high-performance disk-based B+ tree implementation optimized for RFANN queries
 
 - **Disk-based B+ Tree**: Efficient storage and retrieval of high-dimensional vectors with configurable page sizes
 - **RFANN Support**: Range-filtered approximate nearest neighbor search with KNN capabilities
-- **Query Caching**: Intelligent caching mechanism with interval tree-based inverted index for ~36-166x query speedup
+- **Query Caching**: Intelligent caching mechanism with interval tree-based mechanism for query speedup
 - **Bulk Loading**: Efficient bottom-up tree construction for initial index creation
 - **Multiple Data Formats**: Support for `.fvecs` and synthetic data generation
 - **Configurable Parameters**: Adjustable page size, tree order, and vector dimensions
@@ -416,7 +416,7 @@ data/sift_index/
 ├── index.bpt           # B+ tree index file
 ├── config.ini          # Configuration settings
 └── .cache/             # Query cache directory
-    ├── inverted_index.bin    # 2-way key↔query mapping
+    ├── interval_tree.bin    # Interval tree
     └── *.qcache             # Individual query result files
 ```
 

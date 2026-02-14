@@ -18,24 +18,24 @@ static std::string uint64_to_hex(uint64_t value) {
 QueryCache::QueryCache(const std::string& index_dir, bool enabled)
     : index_dir_(index_dir), enabled_(enabled) {
     cache_dir_ = index_dir_ + "/.cache";
-    inverted_index_path_ = cache_dir_ + "/inverted_index.bin";
+    interval_tree_path_ = cache_dir_ + "/interval_tree.bin";
     
     if (enabled_) {
         ensure_directories();
-        load_inverted_index();
+        load_interval_tree();
     }
 }
 
 QueryCache::~QueryCache() {
     if (enabled_) {
-        save_inverted_index();
+        save_interval_tree();
     }
 }
 
 void QueryCache::set_enabled(bool enabled) {
     if (enabled && !enabled_) {
         ensure_directories();
-        load_inverted_index();
+        load_interval_tree();
     }
     enabled_ = enabled;
 }
@@ -137,8 +137,8 @@ void QueryCache::store_result(const std::string& query_id,
     save_query_result(cached);
     
     if (!has_existing) {
-        add_to_inverted_index(query_id, min_key, max_key);
-        save_inverted_index();
+        add_to_interval_tree(query_id, min_key, max_key);
+        save_interval_tree();
     }
     
     enforce_cache_limit();
@@ -152,12 +152,12 @@ void QueryCache::invalidate_for_key(int key) {
     find_overlapping_intervals(interval_root_.get(), key, queries_to_remove);
     
     for (const auto& query_id : queries_to_remove) {
-        remove_from_inverted_index(query_id);
+        remove_from_interval_tree(query_id);
         delete_query_result(query_id);
     }
     
     if (!queries_to_remove.empty()) {
-        save_inverted_index();
+        save_interval_tree();
     }
 }
 
@@ -314,12 +314,12 @@ void QueryCache::enforce_cache_limit() {
         std::string file_path = get_query_file_path(query_id);
         if (fs::exists(file_path)) {
             size_t file_size = fs::file_size(file_path);
-            remove_from_inverted_index(query_id);
+            remove_from_interval_tree(query_id);
             delete_query_result(query_id);
             current_size -= file_size;
         }
     }
-    save_inverted_index();
+    save_interval_tree();
 }
 
 std::string QueryCache::get_query_file_path(const std::string& query_id) const {
@@ -394,7 +394,7 @@ void QueryCache::delete_query_result(const std::string& query_id) {
     fs::remove(path);
 }
 
-void QueryCache::add_to_inverted_index(const std::string& query_id, int min_key, int max_key) {
+void QueryCache::add_to_interval_tree(const std::string& query_id, int min_key, int max_key) {
     // store only range bounds - o(1) instead of o(n) where n = range size
     query_ranges_[query_id] = {min_key, max_key};
     
@@ -402,15 +402,15 @@ void QueryCache::add_to_inverted_index(const std::string& query_id, int min_key,
     insert_interval(interval_root_, min_key, max_key, query_id);
 }
 
-void QueryCache::remove_from_inverted_index(const std::string& query_id) {
+void QueryCache::remove_from_interval_tree(const std::string& query_id) {
     // remove from interval tree
     remove_interval(interval_root_, query_id);
     
     query_ranges_.erase(query_id);
 }
 
-void QueryCache::load_inverted_index() {
-    std::ifstream file(inverted_index_path_, std::ios::binary);
+void QueryCache::load_interval_tree() {
+    std::ifstream file(interval_tree_path_, std::ios::binary);
     if (!file.is_open()) return;
     
     query_ranges_.clear();
@@ -435,8 +435,8 @@ void QueryCache::load_inverted_index() {
     }
 }
 
-void QueryCache::save_inverted_index() {
-    std::ofstream file(inverted_index_path_, std::ios::binary);
+void QueryCache::save_interval_tree() {
+    std::ofstream file(interval_tree_path_, std::ios::binary);
     if (!file.is_open()) return;
     
     uint32_t num_queries = static_cast<uint32_t>(query_ranges_.size());

@@ -117,7 +117,7 @@ public:
 private:
     std::string index_dir_;
     std::string cache_dir_;
-    std::string inverted_index_path_;
+    std::string interval_tree_path_;
     bool enabled_;
     CacheConfig config_;
 
@@ -142,15 +142,15 @@ private:
     std::unique_ptr<IntervalNode> interval_root_;  // Root of interval tree
 
     void ensure_directories();
-    void load_inverted_index();
-    void save_inverted_index();
+    void load_interval_tree();
+    void save_interval_tree();
 
     std::string get_query_file_path(const std::string& query_id) const;
     void save_query_result(const CachedQueryResult& result);
     void delete_query_result(const std::string& query_id);
 
-    void add_to_inverted_index(const std::string& query_id, int min_key, int max_key);
-    void remove_from_inverted_index(const std::string& query_id);
+    void add_to_interval_tree(const std::string& query_id, int min_key, int max_key);
+    void remove_from_interval_tree(const std::string& query_id);
     
     // Interval tree operations for efficient range queries
     void insert_interval(std::unique_ptr<IntervalNode>& node, int start, int end, const std::string& query_id);
