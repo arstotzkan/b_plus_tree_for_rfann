@@ -134,8 +134,8 @@ After building, the following executables are available:
 | `build_index_fvecs` | Build index from FVECS file |
 | `search_index` | Interactive search (range/value/KNN) |
 | `search_index_test` | Batch benchmark with groundtruth |
-| `add_node` | Insert a new data object |
-| `remove_node` | Delete a data object |
+| `add_element_to_index` | Insert a new data object |
+| `remove_element_from_index` | Delete a data object |
 | `read_cache` | Inspect cached queries |
 | `clear_cache` | Clear all cached queries |
 
@@ -261,12 +261,12 @@ search_index_test --index data/sift_index \
   --num-queries 100 --parallel --memory-index
 ```
 
-### add_node
+### add_element_to_index
 
 Insert a new data object into an existing index.
 
 ```bash
-add_node --index <dir> --key <key> --vector <v1,v2,...>
+add_element_to_index --index <dir> --key <key> --vector <v1,v2,...>
 ```
 
 | Flag | Short | Description |
@@ -278,15 +278,15 @@ add_node --index <dir> --key <key> --vector <v1,v2,...>
 
 **Example:**
 ```bash
-add_node --index data/my_index --key 42 --vector 1.0,2.0,3.0,4.0
+add_element_to_index --index data/my_index --key 42 --vector 1.0,2.0,3.0,4.0
 ```
 
-### remove_node
+### remove_element_from_index
 
 Delete a data object from an existing index.
 
 ```bash
-remove_node --index <dir> --key <key> [--vector <v1,v2,...>]
+remove_element_from_index --index <dir> --key <key> [--vector <v1,v2,...>]
 ```
 
 | Flag | Short | Description |
@@ -299,10 +299,10 @@ remove_node --index <dir> --key <key> [--vector <v1,v2,...>]
 **Examples:**
 ```bash
 # Remove first entry with key 42
-remove_node --index data/my_index --key 42
+remove_element_from_index --index data/my_index --key 42
 
 # Remove specific entry matching key AND vector
-remove_node --index data/my_index --key 42 --vector 1.0,2.0,3.0,4.0
+remove_element_from_index --index data/my_index --key 42 --vector 1.0,2.0,3.0,4.0
 ```
 
 ### read_cache

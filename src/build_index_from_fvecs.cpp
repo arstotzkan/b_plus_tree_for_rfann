@@ -14,11 +14,11 @@
 #include <nlohmann/json.hpp>
 
 void print_usage(const char* program_name) {
-    std::cout << "Usage: " << program_name << " --input <fvecs_file> --index <index_dir> [options]" << "\n";
+    std::cout << "Usage: " << program_name << " --input <fvecs_file> --output <index_dir> [options]" << "\n";
     std::cout << "\n";
     std::cout << "Flags:" << "\n";
     std::cout << "  --input, -i              Path to the input .fvecs file" << "\n";
-    std::cout << "  --index, -o              Path to the index directory (will contain index.bpt and .cache/)" << "\n";
+    std::cout << "  --output, -o              Path to the index directory (will contain index.bpt and .cache/)" << "\n";
     std::cout << "  --order                  B+ tree order (default: auto-calculated based on vector dimension)" << "\n";
     std::cout << "  --batch-size             Number of vectors to read and process per chunk (default: 10000)" << "\n";
     std::cout << "  --max-cache-size         Maximum cache size in MB (default: 100)" << "\n";
@@ -35,7 +35,7 @@ void print_usage(const char* program_name) {
     std::cout << "  Each vector: 4 bytes (dimension d as int32) + d*4 bytes (floats)" << "\n";
     std::cout << "\n";
     std::cout << "Examples:" << "\n";
-    std::cout << "  " << program_name << " --input data/siftsmall_base.fvecs --index data/sift_index" << "\n";
+    std::cout << "  " << program_name << " --input data/siftsmall_base.fvecs --output data/sift_index" << "\n";
     std::cout << "\n";
 }
 
@@ -58,7 +58,7 @@ int main(int argc, char* argv[]) {
         if ((arg == "--input" || arg == "-i") && i + 1 < argc) {
             input_path = argv[++i];
             has_input = true;
-        } else if ((arg == "--index" || arg == "-o") && i + 1 < argc) {
+        } else if ((arg == "--output" || arg == "-o") && i + 1 < argc) {
             index_dir = argv[++i];
             has_index = true;
         } else if (arg == "--order" && i + 1 < argc) {

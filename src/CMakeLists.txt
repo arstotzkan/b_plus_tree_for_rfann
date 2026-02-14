@@ -63,14 +63,14 @@ add_executable(search_index_test
 )
 
 # Add node executable (insert new data objects)
-add_executable(add_node
-    add_node.cpp
+add_executable(add_element_to_index
+    add_element_to_index.cpp
     ${COMMON_SOURCES}
 )
 
 # Remove node executable (delete data objects)
-add_executable(remove_node
-    remove_node.cpp
+add_executable(remove_element_from_index
+    remove_element_from_index.cpp
     ${COMMON_SOURCES}
 )
 
