@@ -84,7 +84,7 @@ int main(int argc, char* argv[]) {
     // Configure B+ tree based on vector dimension
     uint32_t order = (custom_order > 0) ? static_cast<uint32_t>(custom_order) : 4;
     
-    // Auto-suggest order if not specified (Model B: vectors always stored separately)
+    // auto-suggest order if not specified (seperate vector storage: vectors always stored separately)
     if (custom_order == 0) {
         order = BPTreeConfig::suggest_order(static_cast<uint32_t>(vector_dimension), 16384);
         if (order < 2) order = 2;

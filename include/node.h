@@ -29,19 +29,18 @@ constexpr int MAX_ORDER = 64;
 constexpr int MAX_VECTOR_DIM = 2048;
 
 // Dynamic BPlusNode that works with runtime configuration
-// Model B: Each key is unique within a leaf, and maps to a LIST of vectors in VectorStore
-struct BPlusNode {
+// Model B: Each key is unique within a leaf, and struct BPlusNode {
     bool isLeaf;
     uint16_t keyCount;
     std::vector<int> keys;              // Unique keys in this node
     std::vector<uint32_t> children;     // Child pointers (internal nodes only)
     uint32_t next;                      // Next leaf pointer (leaf nodes only)
     
-    // For DataObject storage in leaf nodes (Model B: unique key -> vector list)
-    std::vector<uint64_t> vector_list_ids;   // ID of first vector in the list for each key
-    std::vector<uint32_t> vector_counts;     // Number of vectors for each key
+    // for DataObject storage in leaf nodes (seperate vector storage: unique key -> vector list)
+    std::vector<uint64_t> vector_list_ids;   // id of first vector in the list for each key
+    std::vector<uint32_t> vector_counts;     // number of vectors for each key
     
-    // Initialize with given order (max_vec_size no longer needed for node structure)
+    // initialize with given order (max_vec_size no longer needed for node structure)
     void init(uint32_t order, uint32_t /*max_vec_size*/ = 0) {
         isLeaf = false;
         keyCount = 0;
@@ -52,7 +51,7 @@ struct BPlusNode {
         vector_counts.resize(order, 0);
     }
     
-    // Serialize node to raw bytes for disk storage
+    // serialize node to raw bytes for disk storage
     void serialize(char* buffer, const BPTreeConfig& config) const {
         char* ptr = buffer;
         
@@ -84,7 +83,7 @@ struct BPlusNode {
         std::memcpy(ptr, &next, sizeof(uint32_t));
         ptr += sizeof(uint32_t);
         
-        // vector_list_ids[order] - ID of first vector in list for each key
+        // vector_list_ids[order] - id of first vector in list for each key
         for (uint32_t i = 0; i < config.order; i++) {
             uint64_t vid = (i < vector_list_ids.size()) ? vector_list_ids[i] : 0;
             std::memcpy(ptr, &vid, sizeof(uint64_t));
@@ -99,11 +98,11 @@ struct BPlusNode {
         }
     }
     
-    // Deserialize node from raw bytes
+    // deserialize node from raw bytes
     void deserialize(const char* buffer, const BPTreeConfig& config) {
         const char* ptr = buffer;
         
-        // Initialize vectors with proper sizes
+        // initialize vectors with proper sizes
         init(config.order);
         
         // isLeaf

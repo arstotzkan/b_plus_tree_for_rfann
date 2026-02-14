@@ -73,7 +73,7 @@ bool QueryCache::has_cached_result(const std::string& query_id, int k) const {
     if (!enabled_) return false;
     if (query_ranges_.find(query_id) == query_ranges_.end()) return false;
     
-    // Load and check if we have at least k neighbors cached
+    // load and check if we have at least k neighbors cached
     CachedQueryResult result;
     if (!load_query_result(query_id, result)) return false;
     
@@ -87,7 +87,7 @@ CachedQueryResult QueryCache::get_cached_result(const std::string& query_id, int
     if (load_query_result(query_id, result)) {
         result.last_used_date = std::time(nullptr);
         
-        // Return only first k neighbors
+        // return only first k neighbors
         if (static_cast<int>(result.neighbors.size()) > k) {
             result.neighbors.resize(k);
         }
@@ -104,8 +104,8 @@ void QueryCache::store_result(const std::string& query_id,
                               const std::string& used_similar_query_id) {
     if (!enabled_) return;
     
-    // If we used a similar query's results, don't cache this query
-    // Instead, update the similar query's last_used_date
+    // if we used a similar query's results, don't cache this query
+    // instead, update the similar query's last_used_date
     if (!used_similar_query_id.empty()) {
         CachedQueryResult similar_result;
         if (load_query_result(used_similar_query_id, similar_result)) {
@@ -115,12 +115,12 @@ void QueryCache::store_result(const std::string& query_id,
         return;
     }
     
-    // Check if we already have a cached result
+    // check if we already have a cached result
     CachedQueryResult existing;
     bool has_existing = load_query_result(query_id, existing);
     
     if (has_existing && existing.max_k >= k) {
-        // Existing cache has same or more neighbors, don't update
+        // existing cache has same or more neighbors, don't update
         return;
     }
     
@@ -147,7 +147,7 @@ void QueryCache::store_result(const std::string& query_id,
 void QueryCache::invalidate_for_key(int key) {
     if (!enabled_) return;
     
-    // Use interval tree for efficient O(log N) lookup instead of O(N) linear search
+    // use interval tree for efficient o(log n) lookup instead of o(n) linear search
     std::vector<std::string> queries_to_remove;
     find_overlapping_intervals(interval_root_.get(), key, queries_to_remove);
     
@@ -166,7 +166,7 @@ int QueryCache::update_for_inserted_object(int key, const std::vector<float>& ve
                                             int32_t original_id) {
     if (!enabled_) return 0;
     
-    // Find all queries whose range contains this key
+    // find all queries whose range contains this key
     std::vector<std::string> affected_queries;
     find_overlapping_intervals(interval_root_.get(), key, affected_queries);
     
@@ -179,22 +179,22 @@ int QueryCache::update_for_inserted_object(int key, const std::vector<float>& ve
         if (!load_query_result(query_id, result)) continue;
         if (result.neighbors.empty()) continue;
         
-        // Calculate distance from query vector to new object
+        // calculate distance from query vector to new object
         double new_dist = distance_fn(result.input_vector, vector);
         
-        // Get the furthest cached neighbor's distance
+        // get the furthest cached neighbor's distance
         double furthest_dist = result.neighbors.back().distance;
         
-        // If new object is closer than furthest cached neighbor, insert it
+        // if new object is closer than furthest cached neighbor, insert it
         if (new_dist < furthest_dist || static_cast<int>(result.neighbors.size()) < result.max_k) {
-            // Create new neighbor entry
+            // create new neighbor entry
             CachedNeighbor new_neighbor;
             new_neighbor.vector = vector;
             new_neighbor.key = key;
             new_neighbor.original_id = original_id;
             new_neighbor.distance = new_dist;
             
-            // Find insertion position (keep sorted by distance)
+            // find insertion position (keep sorted by distance)
             auto insert_pos = std::lower_bound(result.neighbors.begin(), result.neighbors.end(), new_neighbor,
                 [](const CachedNeighbor& a, const CachedNeighbor& b) {
                     return a.distance < b.distance;
@@ -202,7 +202,7 @@ int QueryCache::update_for_inserted_object(int key, const std::vector<float>& ve
             
             result.neighbors.insert(insert_pos, new_neighbor);
             
-            // Keep the furthest neighbor - allows cache to grow and serve higher K queries
+            // keep the furthest neighbor - allows cache to grow and serve higher k queries
             
             result.last_used_date = std::time(nullptr);
             save_query_result(result);
@@ -216,7 +216,7 @@ int QueryCache::update_for_inserted_object(int key, const std::vector<float>& ve
 int QueryCache::update_for_deleted_object(int key, const std::vector<float>& vector) {
     if (!enabled_) return 0;
     
-    // Find all queries whose range contains this key
+    // find all queries whose range contains this key
     std::vector<std::string> affected_queries;
     find_overlapping_intervals(interval_root_.get(), key, affected_queries);
     
@@ -229,12 +229,12 @@ int QueryCache::update_for_deleted_object(int key, const std::vector<float>& vec
         CachedQueryResult result;
         if (!load_query_result(query_id, result)) continue;
         
-        // Find and remove the deleted object from neighbors
+        // find and remove the deleted object from neighbors
         bool found = false;
         auto it = result.neighbors.begin();
         while (it != result.neighbors.end()) {
             if (it->key == key) {
-                // Compare vectors
+                // compare vectors
                 bool vectors_match = true;
                 if (it->vector.size() == vector.size()) {
                     for (size_t i = 0; i < vector.size(); i++) {
@@ -250,7 +250,7 @@ int QueryCache::update_for_deleted_object(int key, const std::vector<float>& vec
                 if (vectors_match) {
                     it = result.neighbors.erase(it);
                     found = true;
-                    break;  // Only remove first match
+                    break;  // only remove first match
                 } else {
                     ++it;
                 }
@@ -395,15 +395,15 @@ void QueryCache::delete_query_result(const std::string& query_id) {
 }
 
 void QueryCache::add_to_inverted_index(const std::string& query_id, int min_key, int max_key) {
-    // Store only range bounds - O(1) instead of O(N) where N = range size
+    // store only range bounds - o(1) instead of o(n) where n = range size
     query_ranges_[query_id] = {min_key, max_key};
     
-    // Add to interval tree for efficient lookups
+    // add to interval tree for efficient lookups
     insert_interval(interval_root_, min_key, max_key, query_id);
 }
 
 void QueryCache::remove_from_inverted_index(const std::string& query_id) {
-    // Remove from interval tree
+    // remove from interval tree
     remove_interval(interval_root_, query_id);
     
     query_ranges_.erase(query_id);
@@ -414,7 +414,7 @@ void QueryCache::load_inverted_index() {
     if (!file.is_open()) return;
     
     query_ranges_.clear();
-    interval_root_.reset();  // Clear interval tree
+    interval_root_.reset();  // clear interval tree
     
     uint32_t num_queries;
     file.read(reinterpret_cast<char*>(&num_queries), sizeof(num_queries));
@@ -430,7 +430,7 @@ void QueryCache::load_inverted_index() {
         file.read(reinterpret_cast<char*>(&max_key), sizeof(max_key));
         
         query_ranges_[query_id] = {min_key, max_key};
-        // Rebuild interval tree
+        // rebuild interval tree
         insert_interval(interval_root_, min_key, max_key, query_id);
     }
 }
@@ -451,7 +451,7 @@ void QueryCache::save_inverted_index() {
         file.write(reinterpret_cast<const char*>(&range.max_key), sizeof(range.max_key));
     }
     
-    // Note: Interval tree is rebuilt from query_ranges_ on load, so no need to persist it separately
+    // note: interval tree is rebuilt from query_ranges_ on load, so no need to persist it separately
 }
 
 size_t QueryCache::get_cache_size() const {

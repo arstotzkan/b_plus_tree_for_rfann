@@ -48,7 +48,7 @@ int main(int argc, char* argv[]) {
     bool has_input = false;
     bool has_index = false;
     bool has_label = false;
-    // Model B: Vectors are always stored separately (no inline storage option)
+    // seperate vector storage: vectors are always stored separately (no inline storage option)
     size_t max_cache_size_mb = 100;
 
     // Parse command line flags
@@ -117,8 +117,8 @@ int main(int argc, char* argv[]) {
     // Configure B+ tree based on vector dimension
     uint32_t order = (custom_order > 0) ? static_cast<uint32_t>(custom_order) : 4;
     
-    // For large vectors, we may need to reduce order to fit in reasonable page sizes
-    // Auto-suggest order if not specified (Model B: vectors always stored separately)
+    // for large vectors, we may need to reduce order to fit in reasonable page sizes
+    // auto-suggest order if not specified (seperate vector storage: vectors always stored separately)
     if (custom_order == 0) {
         order = BPTreeConfig::suggest_order(static_cast<uint32_t>(dimension), 16384);
         if (order < 2) order = 2;

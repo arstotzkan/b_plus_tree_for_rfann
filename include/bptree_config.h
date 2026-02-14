@@ -3,15 +3,15 @@
 #include <cstddef>
 #include <algorithm>
 
-// B+ Tree runtime configuration
-// Model B: Vectors are always stored separately in VectorStore
+// B+ tree runtime configuration
+// seperate vector storage: vectors are always stored separately in VectorStore
 struct BPTreeConfig {
     uint32_t page_size;
     uint32_t order;
     uint32_t max_vector_size;  // Max dimension of vectors (for VectorStore)
     uint32_t magic;  // Magic number to identify valid config
     
-    static constexpr uint32_t MAGIC_NUMBER = 0x42505434;  // "BPT4" - new version for Model B
+    static constexpr uint32_t MAGIC_NUMBER = 0x42505434;  // "BPT4" - new version for seperate vector storage
     
     BPTreeConfig() : page_size(8192), order(4), max_vector_size(128), magic(MAGIC_NUMBER) {}
     
@@ -21,10 +21,10 @@ struct BPTreeConfig {
         page_size = calculate_min_page_size();
     }
     
-    // Calculate the minimum page size needed for a BPlusNode with this config
-    // Model B layout: unique keys with vector list references
+    // calculate the minimum page size needed for a BPlusNode  with this config
+    // seperate vector storage layout: unique keys with vector list references
     size_t calculate_node_size() const {
-        // BPlusNode layout (Model B):
+        // BPlusNode  layout (seperate vector storage):
         // - isLeaf: 4 bytes (padded)
         // - keyCount: 4 bytes (padded)  
         // - keys[order]: order * 4 bytes
@@ -57,10 +57,10 @@ struct BPTreeConfig {
         return magic == MAGIC_NUMBER && order > 0 && max_vector_size > 0 && page_size >= calculate_min_page_size();
     }
     
-    // Suggest optimal order for a given target page size
-    // Model B: node size is independent of vector dimension (vectors stored separately)
+    // suggest optimal order for a given target page size
+    // seperate vector storage: node size is independent of vector dimension (vectors stored separately)
     static uint32_t suggest_order(uint32_t max_vec_size, uint32_t target_page_size = 8192) {
-        // Start with order=2 and increase until we exceed page size
+        // start with order=2 and increase until we exceed page size
         for (uint32_t o = 2; o <= 64; o++) {
             BPTreeConfig test_config;
             test_config.order = o;

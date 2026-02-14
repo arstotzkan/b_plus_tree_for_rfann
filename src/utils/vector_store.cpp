@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-// File format (Model B - linked list support):
+// file format (Seperate Vector Storage - linked list support):
 // Header (24 bytes):
 //   - magic (4 bytes): 0x56535432 (VS2 for version 2)
 //   - version (4 bytes): 2

@@ -107,7 +107,7 @@ void PageManager::initNewFile(const BPTreeConfig& config) {
         throw std::runtime_error("Cannot reopen index file: " + filename_);
     }
     
-    // Always initialize vector store (Model B: vectors always stored separately)
+    // always initialize vector store
     std::string vector_store_filename = filename_ + ".vectors";
     vector_store_ = std::make_unique<VectorStore>(vector_store_filename, config.max_vector_size);
 }
@@ -132,7 +132,7 @@ void PageManager::loadExistingFile() {
         header_.total_entries = 0;
     }
     
-    // Always initialize vector store (Model B: vectors always stored separately)
+    // always initialize vector store
     std::string vector_store_filename = filename_ + ".vectors";
     vector_store_ = std::make_unique<VectorStore>(vector_store_filename, header_.config.max_vector_size);
 }
@@ -190,7 +190,7 @@ size_t PageManager::estimateNodeMemoryMB() const {
     uint32_t total_pages = header_.next_free_page;
     if (total_pages <= 1) return 0;
     
-    // Estimate per-node memory (Model B: no inline vectors)
+    // estimate per-node memory
     size_t per_node_bytes = 
         header_.config.order * sizeof(int) +                    // keys
         (header_.config.order + 1) * sizeof(uint32_t) +         // children

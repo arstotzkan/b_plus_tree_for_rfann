@@ -45,11 +45,11 @@ bool DiskBPlusTree::loadIntoMemory(size_t max_memory_mb) {
         return true;
     }
     
-    // Estimate total memory needed
+    // estimate total memory needed
     size_t total_estimated = estimateTotalMemoryMB();
     std::cout << "Total estimated memory: " << total_estimated << " MB" << std::endl;
     
-    // Split memory budget between nodes and vectors
+    // split memory budget between nodes and vectors
     size_t node_memory_mb = 0;
     size_t vector_memory_mb = 0;
     
@@ -57,7 +57,7 @@ bool DiskBPlusTree::loadIntoMemory(size_t max_memory_mb) {
         size_t node_mb = pm->estimateNodeMemoryMB();
         size_t vector_mb = pm->getVectorStore() ? pm->getVectorStore()->estimateMemoryUsageMB() : 0;
         
-        // Allocate proportionally based on estimated sizes
+        // allocate proportionally based on estimated sizes
         if (node_mb + vector_mb > 0) {
             node_memory_mb = (max_memory_mb * node_mb) / (node_mb + vector_mb);
             vector_memory_mb = max_memory_mb - node_memory_mb;
@@ -68,12 +68,12 @@ bool DiskBPlusTree::loadIntoMemory(size_t max_memory_mb) {
         std::cout << "Memory budget: " << max_memory_mb << " MB (nodes: " << node_memory_mb << " MB, vectors: " << vector_memory_mb << " MB)" << std::endl;
     }
     
-    // Use bulk sequential loading
+    // use bulk sequential loading
     pm->loadAllNodes(memory_index_, node_memory_mb);
     
     memory_index_loaded_ = true;
     
-    // Load vectors into memory
+    // load vectors into memory
     if (pm->getVectorStore()) {
         pm->getVectorStore()->loadAllVectorsIntoMemory(vector_memory_mb);
     }
@@ -85,7 +85,7 @@ void DiskBPlusTree::clearMemoryIndex() {
     memory_index_.clear();
     memory_index_loaded_ = false;
     
-    // Clear vector cache
+    // clear vector cache
     if (pm->getVectorStore()) {
         pm->getVectorStore()->clearMemoryCache();
     }
@@ -96,7 +96,7 @@ void DiskBPlusTree::readFromMemory(uint32_t pid, BPlusNode& node) const {
     if (it != memory_index_.end()) {
         node = it->second;
     } else {
-        // Fallback to disk read if not found in memory (shouldn't happen if properly loaded)
+        // fallback to disk read if not found in memory (shouldn't happen if properly loaded)
         pm->readNode(pid, node);
     }
 }
@@ -122,7 +122,7 @@ void DiskBPlusTree::splitLeaf(uint32_t leafPid, BPlusNode& leaf, int& promotedKe
     int mid = leaf.keyCount / 2;
     newLeaf.keyCount = leaf.keyCount - mid;
 
-    // Model B: Copy unique keys with their vector list references
+    // copy unique keys with their vector list references
     for (int i = 0; i < newLeaf.keyCount; i++) {
         newLeaf.keys[i] = leaf.keys[mid + i];
         newLeaf.vector_list_ids[i] = leaf.vector_list_ids[mid + i];
@@ -156,14 +156,14 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
     int32_t orig_id = obj.get_id();
 
     if (rootPid == INVALID_PAGE) {
-        // Create first leaf node as root
+        // create first leaf node as root
         BPlusNode root = createNode();
         root.isLeaf = true;
         root.keyCount = 1;
         root.keys[0] = key;
         root.next = INVALID_PAGE;
         
-        // Store vector and get its ID
+        // store vector and get its id
         uint64_t vector_id = pm->getVectorStore()->storeVector(vec, vec_size, orig_id);
         root.vector_list_ids[0] = vector_id;
         root.vector_counts[0] = 1;
@@ -197,7 +197,7 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
         pid = node.children[i];
     }
 
-    // Model B: Check if key already exists in this leaf
+    // check if key already exists in this leaf
     int existingIdx = -1;
     for (int i = 0; i < node.keyCount; i++) {
         if (node.keys[i] == key) {
@@ -207,7 +207,7 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
     }
     
     if (existingIdx >= 0) {
-        // Key exists - append vector to the existing list
+        // key exists - append vector to the existing list
         uint64_t old_first_id = node.vector_list_ids[existingIdx];
         uint64_t new_first_id = pm->getVectorStore()->appendVectorToList(old_first_id, vec, vec_size, orig_id);
         node.vector_list_ids[existingIdx] = new_first_id;
@@ -216,8 +216,8 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
         return;
     }
 
-    // Key doesn't exist - insert new unique key
-    // Shift existing entries right to make room
+    // key doesn't exist - insert new unique key
+    // shift existing entries right to make room
     int i = node.keyCount - 1;
     while (i >= 0 && node.keys[i] > key) {
         node.keys[i + 1] = node.keys[i];
@@ -226,25 +226,25 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
         i--;
     }
     
-    // Insert new key with its first vector
+    // insert new key with its first vector
     uint64_t vector_id = pm->getVectorStore()->storeVector(vec, vec_size, orig_id);
     node.keys[i + 1] = key;
     node.vector_list_ids[i + 1] = vector_id;
     node.vector_counts[i + 1] = 1;
     node.keyCount++;
 
-    // If leaf doesn't overflow, just write and return
+    // if leaf doesn't overflow, just write and return
     if (node.keyCount < static_cast<int>(order)) {
         write(pid, node);
         return;
     }
 
-    // Leaf overflows - need to split
+    // leaf overflows - need to split
     int promoted;
     uint32_t newNodePid;
     splitLeaf(pid, node, promoted, newNodePid);
 
-    // Propagate split up the tree
+    // propagate split up the tree
     uint32_t childPid = newNodePid;
     int promotedKey = promoted;
     
@@ -253,7 +253,7 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
         BPlusNode parent;
         read(parentPid, parent);
 
-        // Insert promoted key and new child pointer into parent
+        // insert promoted key and new child pointer into parent
         int j = parent.keyCount - 1;
         while (j >= 0 && parent.keys[j] > promotedKey) {
             parent.keys[j + 1] = parent.keys[j];
@@ -265,13 +265,13 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
         parent.children[j + 2] = childPid;
         parent.keyCount++;
 
-        // If parent doesn't overflow, write and return
+        // if parent doesn't overflow, write and return
         if (parent.keyCount < static_cast<int>(order)) {
             write(parentPid, parent);
             return;
         }
 
-        // Parent overflows - split internal node
+        // parent overflows - split internal node
         BPlusNode newInternal = createNode();
         newInternal.isLeaf = false;
         
@@ -296,7 +296,7 @@ void DiskBPlusTree::insert_data_object(const DataObject& obj) {
         childPid = newInternalPid;
     }
 
-    // Root needs to split
+    // root needs to split
     BPlusNode newRoot = createNode();
     newRoot.isLeaf = false;
     newRoot.keyCount = 1;
@@ -314,7 +314,7 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
         return;
     }
     
-    // Validate fill_factor
+    // validate fill_factor
     if (fill_factor < 0.5f) fill_factor = 0.5f;
     if (fill_factor > 1.0f) fill_factor = 1.0f;
     
@@ -328,10 +328,10 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
     
     auto start_time = std::chrono::high_resolution_clock::now();
     
-    // Pre-reserve VectorStore metadata to avoid rehashing during bulk insert
+    // pre-reserve VectorStore  metadata to avoid rehashing during bulk insert
     pm->getVectorStore()->reserveMetadata(objects.size());
     
-    // Step 1: Extract keys once into a flat array (avoids variant dispatch per comparison)
+    // step 1: extract keys once into a flat array (avoids variant dispatch per comparison)
     size_t N = objects.size();
     std::vector<int> keys(N);
     for (size_t i = 0; i < N; i++) {
@@ -339,19 +339,19 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
                                             : static_cast<int>(objects[i].get_float_value());
     }
     
-    // Step 1b: Permutation-based sort — sort lightweight int indices, then reorder DataObjects
+    // step 1b: permutation-based sort — sort lightweight int indices, then reorder DataObjects
     std::vector<int> perm(N);
     std::iota(perm.begin(), perm.end(), 0);
     std::sort(perm.begin(), perm.end(), [&keys](int a, int b) { return keys[a] < keys[b]; });
     
-    // Reorder keys array to sorted order (needed for grouping below)
+    // reorder keys array to sorted order (needed for grouping below)
     {
         std::vector<int> sorted_keys(N);
         for (size_t i = 0; i < N; i++) sorted_keys[i] = keys[perm[i]];
         keys = std::move(sorted_keys);
     }
     
-    // Apply permutation in-place using cycle-following (each DataObject moved at most once)
+    // apply permutation in-place using cycle-following (each DataObject  moved at most once)
     {
         std::vector<bool> placed(N, false);
         for (size_t i = 0; i < N; i++) {
@@ -370,7 +370,7 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
     perm.clear();
     perm.shrink_to_fit();
     
-    // Step 2: Group objects by key using pre-extracted sorted keys (no variant dispatch)
+    // step 2: group objects by key using pre-extracted sorted keys (no variant dispatch)
     struct KeyGroup {
         int key;
         std::vector<const DataObject*> objects;
@@ -393,8 +393,8 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
     
     std::cout << "  Grouped into " << key_groups.size() << " unique keys" << std::endl;
     
-    // Step 3: Build leaf nodes
-    // Keep previous leaf in memory to avoid re-reading from disk for next-pointer linking
+    // step 3: build leaf nodes
+    // keep previous leaf in memory to avoid re-reading from disk for next-pointer linking
     std::vector<uint32_t> leaf_pids;
     std::vector<int> leaf_first_keys;
     BPlusNode prev_leaf;
@@ -406,11 +406,11 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
         leaf.isLeaf = true;
         leaf.keyCount = 0;
         
-        // Fill this leaf with keys up to keys_per_leaf
+        // fill this leaf with keys up to keys_per_leaf
         while (leaf.keyCount < keys_per_leaf && group_idx < key_groups.size()) {
             const KeyGroup& group = key_groups[group_idx];
             
-            // Store all vectors for this key
+            // store all vectors for this key
             uint64_t first_vector_id = 0;
             uint32_t vector_count = 0;
             
@@ -438,7 +438,7 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
         leaf_pids.push_back(leaf_pid);
         leaf_first_keys.push_back(leaf.keys[0]);
         
-        // Link previous leaf to this one (using in-memory copy, no disk re-read)
+        // link previous leaf to this one (using in-memory copy, no disk re-read)
         if (prev_leaf_pid != INVALID_PAGE) {
             prev_leaf.next = leaf_pid;
             write(prev_leaf_pid, prev_leaf);
@@ -449,18 +449,18 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
         prev_leaf_pid = leaf_pid;
     }
     
-    // Write the last leaf (its next pointer is already INVALID_PAGE)
+    // write the last leaf (its next pointer is already INVALID_PAGE)
     if (prev_leaf_pid != INVALID_PAGE) {
         write(prev_leaf_pid, prev_leaf);
     }
     
     std::cout << "  Created " << leaf_pids.size() << " leaf nodes" << std::endl;
     
-    // Step 4: Build internal nodes bottom-up
+    // step 4: build internal nodes bottom-up
     if (leaf_pids.size() == 1) {
         pm->setRootDeferred(leaf_pids[0]);
     } else {
-        // Build internal node levels
+        // build internal node levels
         std::vector<uint32_t> current_level_pids = leaf_pids;
         std::vector<int> current_level_keys = leaf_first_keys;
         
@@ -478,12 +478,12 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
                 internal.isLeaf = false;
                 internal.keyCount = 0;
                 
-                // First child pointer
+                // first child pointer
                 internal.children[0] = current_level_pids[child_idx];
                 int first_key = current_level_keys[child_idx];
                 child_idx++;
                 
-                // Add keys and child pointers
+                // add keys and child pointers
                 while (internal.keyCount < keys_per_internal && child_idx < current_level_pids.size()) {
                     internal.keys[internal.keyCount] = current_level_keys[child_idx];
                     internal.children[internal.keyCount + 1] = current_level_pids[child_idx];
@@ -505,7 +505,7 @@ void DiskBPlusTree::bulk_load(std::vector<DataObject>& objects, float fill_facto
         pm->setRootDeferred(current_level_pids[0]);
     }
     
-    // Single header save + vector store flush at the end (instead of per-allocation)
+    // single header save + vector store flush at the end (instead of per-allocation)
     pm->getVectorStore()->flush();
     pm->saveHeader();
     
@@ -545,7 +545,7 @@ DataObject* DiskBPlusTree::search_data_object(const DataObject& obj, bool use_me
         pid = nodePtr->children[i];
     }
     
-    // Model B: Find unique key and retrieve first vector from its list
+    // find unique key and retrieve first vector from its list
     for (int i = 0; i < nodePtr->keyCount; i++) {
         if (nodePtr->keys[i] == key) {
             std::vector<float> vec;
@@ -568,7 +568,7 @@ DataObject* DiskBPlusTree::search_data_object(int key, bool use_memory_index) {
     BPlusNode diskNode;
     const BPlusNode* nodePtr = nullptr;
     
-    // Navigate to the leaf that should contain the key
+    // navigate to the leaf that should contain the key
     while (true) {
         if (use_memory_index && memory_index_loaded_) {
             nodePtr = getNodeFromMemory(pid);
@@ -584,7 +584,7 @@ DataObject* DiskBPlusTree::search_data_object(int key, bool use_memory_index) {
         pid = nodePtr->children[i];
     }
     
-    // Model B: Keys are unique per leaf, search for exact match
+    // keys are unique per leaf, search for exact match
     for (int i = 0; i < nodePtr->keyCount; i++) {
         if (nodePtr->keys[i] == key) {
             std::vector<float> vec;
@@ -656,7 +656,7 @@ bool DiskBPlusTree::deleteDataObject(int key, const std::vector<float>& vector) 
         pid = node.children[i];
     }
     
-    // Model B: Find the unique key
+    // find the unique key
     int keyIndex = -1;
     for (int i = 0; i < node.keyCount; i++) {
         if (node.keys[i] == key) {
@@ -664,15 +664,15 @@ bool DiskBPlusTree::deleteDataObject(int key, const std::vector<float>& vector) 
             break;
         }
         if (node.keys[i] > key) {
-            return false;  // Key not found
+            return false;  // key not found
         }
     }
     
     if (keyIndex < 0) {
-        return false;  // Key not found
+        return false;  // key not found
     }
     
-    // Remove the specific vector from the list
+    // remove the specific vector from the list
     uint32_t new_count;
     uint64_t new_first_id = pm->getVectorStore()->removeVectorFromList(
         node.vector_list_ids[keyIndex], 
@@ -682,19 +682,19 @@ bool DiskBPlusTree::deleteDataObject(int key, const std::vector<float>& vector) 
     );
     
     if (new_count == node.vector_counts[keyIndex]) {
-        return false;  // Vector not found in list
+        return false;  // vector not found in list
     }
     
     if (new_count > 0) {
-        // List still has vectors, just update the reference
+        // list still has vectors, just update the reference
         node.vector_list_ids[keyIndex] = new_first_id;
         node.vector_counts[keyIndex] = new_count;
         write(pid, node);
         return true;
     }
     
-    // List is now empty - remove the entire key from the leaf
-    // Remove the entry by shifting elements left
+    // list is now empty - remove the entire key from the leaf
+    // remove the entry by shifting elements left
     for (int i = keyIndex; i < node.keyCount - 1; i++) {
         node.keys[i] = node.keys[i + 1];
         node.vector_list_ids[i] = node.vector_list_ids[i + 1];
@@ -702,7 +702,7 @@ bool DiskBPlusTree::deleteDataObject(int key, const std::vector<float>& vector) 
     }
     node.keyCount--;
     
-    // If this is the root leaf node
+    // if this is the root leaf node
     if (path.size() == 1) {
         if (node.keyCount == 0) {
             pm->setRoot(INVALID_PAGE);
@@ -712,7 +712,7 @@ bool DiskBPlusTree::deleteDataObject(int key, const std::vector<float>& vector) 
         return true;
     }
     
-    // Update ancestor separator keys if needed
+    // update ancestor separator keys if needed
     if (node.keyCount > 0) {
         int replacementKey = node.keys[0];
         for (int level = static_cast<int>(path.size()) - 2; level >= 0; level--) {
@@ -739,7 +739,7 @@ bool DiskBPlusTree::deleteDataObject(int key, const std::vector<float>& vector) 
         return true;
     }
     
-    // Leaf underflows - handle borrowing or merging
+    // leaf underflows - handle borrowing or merging
     write(pid, node);
     
     for (int level = static_cast<int>(path.size()) - 1; level > 0; level--) {
@@ -819,7 +819,7 @@ bool DiskBPlusTree::deleteKey(int key) {
         pid = node.children[i];
     }
     
-    // Model B: Find the unique key
+    // find the unique key
     int keyIndex = -1;
     for (int i = 0; i < node.keyCount; i++) {
         if (node.keys[i] == key) {
@@ -835,7 +835,7 @@ bool DiskBPlusTree::deleteKey(int key) {
         return false;
     }
     
-    // Remove the key by shifting elements left
+    // remove the key by shifting elements left
     for (int i = keyIndex; i < node.keyCount - 1; i++) {
         node.keys[i] = node.keys[i + 1];
         node.vector_list_ids[i] = node.vector_list_ids[i + 1];
@@ -843,9 +843,9 @@ bool DiskBPlusTree::deleteKey(int key) {
     }
     node.keyCount--;
     
-    // If this is the root leaf node, just write it back
+    // if this is the root leaf node, just write it back
     if (path.size() == 1) {
-        // If root becomes empty, tree becomes empty
+        // if root becomes empty, tree becomes empty
         if (node.keyCount == 0) {
             pm->setRoot(INVALID_PAGE);
         } else {
@@ -854,16 +854,16 @@ bool DiskBPlusTree::deleteKey(int key) {
         return true;
     }
     
-    // Update all ancestor separator keys that match the deleted key
-    // This is necessary because B+ tree separators are copies of leaf keys
+    // update all ancestor separator keys that match the deleted key
+    // this is necessary because b+ tree separators are copies of leaf keys
     if (node.keyCount > 0) {
-        int replacementKey = node.keys[0]; // New first key of the leaf after deletion
+        int replacementKey = node.keys[0]; // new first key of the leaf after deletion
         for (int level = static_cast<int>(path.size()) - 2; level >= 0; level--) {
             BPlusNode ancestor;
             read(path[level], ancestor);
             bool modified = false;
             
-            // Check all keys in this ancestor node
+            // check all keys in this ancestor node
             for (int k = 0; k < ancestor.keyCount; k++) {
                 if (ancestor.keys[k] == key) {
                     ancestor.keys[k] = replacementKey;
@@ -883,10 +883,10 @@ bool DiskBPlusTree::deleteKey(int key) {
         return true;
     }
     
-    // Leaf underflows - need to borrow or merge
+    // leaf underflows - need to borrow or merge
     write(pid, node);
     
-    // Handle underflow by borrowing or merging, propagating up if needed
+    // handle underflow by borrowing or merging, propagating up if needed
     for (int level = static_cast<int>(path.size()) - 1; level > 0; level--) {
         uint32_t currentPid = path[level];
         uint32_t parentPid = path[level - 1];
@@ -895,15 +895,15 @@ bool DiskBPlusTree::deleteKey(int key) {
         BPlusNode current;
         read(currentPid, current);
         
-        // Check if current node is underflowing
+        // check if current node is underflowing
         if (current.keyCount >= minKeys) {
-            break; // No underflow, we're done
+            break; // no underflow, we're done
         }
         
         BPlusNode parent;
         read(parentPid, parent);
         
-        // Try to borrow from left sibling
+        // try to borrow from left sibling
         if (childIdx > 0) {
             if (borrowFromLeftSibling(parent, childIdx, current, currentPid)) {
                 write(parentPid, parent);
@@ -911,7 +911,7 @@ bool DiskBPlusTree::deleteKey(int key) {
             }
         }
         
-        // Try to borrow from right sibling
+        // try to borrow from right sibling
         if (childIdx < parent.keyCount) {
             if (borrowFromRightSibling(parent, childIdx, current, currentPid)) {
                 write(parentPid, parent);
@@ -919,7 +919,7 @@ bool DiskBPlusTree::deleteKey(int key) {
             }
         }
         
-        // Must merge - prefer merging with left sibling
+        // must merge - prefer merging with left sibling
         if (childIdx > 0) {
             mergeWithLeftSibling(parent, childIdx, current, currentPid);
         } else {
@@ -928,7 +928,7 @@ bool DiskBPlusTree::deleteKey(int key) {
         
         write(parentPid, parent);
         
-        // If parent is root and now has 0 keys, make the merged child the new root
+        // if parent is root and now has 0 keys, make the merged child the new root
         if (parentPid == rootPid && parent.keyCount == 0) {
             pm->setRoot(parent.children[0]);
             break;
@@ -950,14 +950,14 @@ bool DiskBPlusTree::borrowFromLeftSibling(BPlusNode& parent, int childIdx, BPlus
     }
     
     if (node.isLeaf) {
-        // Shift all keys in current node right
+        // shift all keys in current node right
         for (int i = node.keyCount; i > 0; i--) {
             node.keys[i] = node.keys[i - 1];
             node.vector_list_ids[i] = node.vector_list_ids[i - 1];
             node.vector_counts[i] = node.vector_counts[i - 1];
         }
         
-        // Move last key from left sibling to current node
+        // move last key from left sibling to current node
         int lastIdx = leftSibling.keyCount - 1;
         node.keys[0] = leftSibling.keys[lastIdx];
         node.vector_list_ids[0] = leftSibling.vector_list_ids[lastIdx];
@@ -1000,13 +1000,13 @@ bool DiskBPlusTree::borrowFromRightSibling(BPlusNode& parent, int childIdx, BPlu
     }
     
     if (node.isLeaf) {
-        // Move first key from right sibling to end of current node
+        // move first key from right sibling to end of current node
         node.keys[node.keyCount] = rightSibling.keys[0];
         node.vector_list_ids[node.keyCount] = rightSibling.vector_list_ids[0];
         node.vector_counts[node.keyCount] = rightSibling.vector_counts[0];
         node.keyCount++;
         
-        // Shift all keys in right sibling left
+        // shift all keys in right sibling left
         for (int i = 0; i < rightSibling.keyCount - 1; i++) {
             rightSibling.keys[i] = rightSibling.keys[i + 1];
             rightSibling.vector_list_ids[i] = rightSibling.vector_list_ids[i + 1];
@@ -1016,7 +1016,7 @@ bool DiskBPlusTree::borrowFromRightSibling(BPlusNode& parent, int childIdx, BPlu
         
         parent.keys[childIdx] = rightSibling.keys[0];
     } else {
-        // Internal node borrowing
+        // internal node borrowing
         node.keys[node.keyCount] = parent.keys[childIdx];
         node.children[node.keyCount + 1] = rightSibling.children[0];
         node.keyCount++;
@@ -1043,7 +1043,7 @@ void DiskBPlusTree::mergeWithLeftSibling(BPlusNode& parent, int childIdx, BPlusN
     read(leftPid, leftSibling);
     
     if (node.isLeaf) {
-        // Move all keys from current node to left sibling
+        // move all keys from current node to left sibling
         for (int i = 0; i < node.keyCount; i++) {
             leftSibling.keys[leftSibling.keyCount + i] = node.keys[i];
             leftSibling.vector_list_ids[leftSibling.keyCount + i] = node.vector_list_ids[i];
@@ -1160,7 +1160,7 @@ std::vector<DataObject*> DiskBPlusTree::search_range(int min_key, int max_key, b
         
         for (int i = 0; i < leafPtr->keyCount; i++) {
             if (leafPtr->keys[i] >= min_key && leafPtr->keys[i] <= max_key) {
-                // Model B: Retrieve ALL vectors for this key
+                // retrieve all vectors for this key
                 std::vector<std::vector<float>> vectors;
                 std::vector<uint32_t> sizes;
                 std::vector<int32_t> original_ids;
@@ -1256,7 +1256,7 @@ void DiskBPlusTree::print_tree_recursive(uint32_t pid, int level) {
         if (i > 0) std::cout << ", ";
         std::cout << node.keys[i];
         if (node.isLeaf) {
-            // Model B: Show vector list info
+            // show vector list info
             std::cout << "(list_id=" << node.vector_list_ids[i] << ",count=" << node.vector_counts[i] << ")";
         }
     }
@@ -1379,7 +1379,7 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
     int last_progress_percent = -1;
     auto last_progress_time = leaf_scan_start;
     
-    // Model B: Process all vectors from each key's list
+    // process all vectors from each key's list
     if (use_memory_index && memory_index_loaded_) {
         while (currentPid != INVALID_PAGE) {
             const BPlusNode* leafPtr = getNodeFromMemory(currentPid);
@@ -1402,7 +1402,7 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
                         last_progress_time = current_time;
                     }
                     
-                    // Model B: Retrieve ALL vectors for this key
+                    // retrieve all vectors for this key
                     std::vector<std::vector<float>> vectors;
                     std::vector<uint32_t> sizes;
                     std::vector<int32_t> original_ids;
@@ -1480,7 +1480,7 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_optimized(const std::vector<f
                         last_progress_time = current_time;
                     }
                     
-                    // Model B: Retrieve ALL vectors for this key
+                    // retrieve all vectors for this key
                     auto vec_start = std::chrono::high_resolution_clock::now();
                     std::vector<std::vector<float>> vectors;
                     std::vector<uint32_t> sizes;
@@ -1680,7 +1680,7 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_parallel(
     // Log actual threads being used for this query
     Logger::log_query("KNN_PARALLEL", "Threads: " + std::to_string(actual_threads) + " | Range: [" + std::to_string(min_key) + "," + std::to_string(max_key) + "] | K: " + std::to_string(k), 0.0, 0);
     
-    // Worker function for each thread (Model B: retrieve all vectors from each key's list)
+    // worker function for each thread (retrieve all vectors from each key's list)
     auto worker = [&](int thread_id, int sub_min, int sub_max) {
         std::priority_queue<std::pair<double, DataObject*>> local_heap;
         
@@ -1729,7 +1729,7 @@ std::vector<DataObject*> DiskBPlusTree::search_knn_parallel(
             
             for (int i = 0; i < leafPtr->keyCount; i++) {
                 if (leafPtr->keys[i] >= sub_min && leafPtr->keys[i] <= sub_max) {
-                    // Model B: Retrieve ALL vectors for this key
+                    // retrieve all vectors for this key
                     std::vector<std::vector<float>> vectors;
                     std::vector<uint32_t> sizes;
                     std::vector<int32_t> original_ids;

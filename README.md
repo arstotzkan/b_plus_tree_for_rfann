@@ -19,7 +19,7 @@ A high-performance disk-based B+ tree implementation optimized for RFANN queries
 
 - **DiskBPlusTree**: Main B+ tree implementation with disk-based page management
 - **QueryCache**: LRU cache with interval tree for efficient range-based cache lookups
-- **VectorStore**: Separate storage for high-dimensional vectors (Model B architecture)
+- **VectorStore**: Separate storage for high-dimensional vectors
 - **IndexDirectory**: Directory-based index management (stores `index.bpt`, `index.bpt.vectors`, and `.cache/`)
 - **DataObject**: Vector and numeric value storage abstraction
 - **PageManager**: Low-level disk I/O and page allocation
